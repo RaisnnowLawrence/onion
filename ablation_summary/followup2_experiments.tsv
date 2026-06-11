@@ -1,0 +1,17 @@
+id	name	description	params
+C1	clean_rounds1	clean rerun of rounds=1 CoT	--rounds 1 --chain_of_thoughts
+NC1	no_cot_rounds1	no-CoT with one round	--rounds 1
+NC3	no_cot_rounds3	no-CoT with three rounds	--rounds 3
+NE1	no_cot_ensemble1	no-CoT with one ensemble sample	--n_ensemble 1
+NE3	no_cot_ensemble3	no-CoT with three ensemble samples	--n_ensemble 3
+CTX0	context_empty	empty brief context	--context_mode empty --chain_of_thoughts
+CTXC	context_caption_only	only original caption in brief context	--context_mode caption_only --chain_of_thoughts
+CTXO	context_objects_only	only selected object names in brief context	--context_mode objects_only --chain_of_thoughts
+CTXN	context_no_round_state	no previous round/thought state in brief context	--context_mode no_round_state --chain_of_thoughts
+QG	qwen_caption_global	Qwen global caption only	--use_qwen_blip2_caption --qwen_caption_mode global --chain_of_thoughts
+QL	qwen_caption_local	Qwen local caption only	--use_qwen_blip2_caption --qwen_caption_mode local --chain_of_thoughts
+QS	qwen_caption_short	short Qwen global+local captions	--use_qwen_blip2_caption --qwen_caption_max_tokens 48 --qwen_caption_final_max_chars 220 --chain_of_thoughts
+QNF	qwen_caption_no_final	query Qwen captions but do not inject into final prompt	--use_qwen_blip2_caption --qwen_caption_no_final_context --chain_of_thoughts
+AS	answer_strict_final	strict Final Answer/Answer extraction	--answer_extraction_strategy strict_final --chain_of_thoughts
+AL	answer_last_line	last non-empty line extraction	--answer_extraction_strategy last_line --chain_of_thoughts
+AR	answer_raw	raw CoT response for voting/eval	--answer_extraction_strategy raw --chain_of_thoughts
