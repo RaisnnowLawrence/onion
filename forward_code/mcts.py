@@ -172,6 +172,7 @@ class MCTSQuestionSample(QuestionSample):
         self.actions = []             # 动作名列表：["focus_cat", "focus_dog", "zoom_out", ...]
         self.action_objects = {}      # 动作名 -> 物体名映射：{"focus_cat": "cat", ...}
         self.action_prompts = {}      # 动作名 -> 描述文本
+        self.detected_objects = []    # SAM实际检测到的物体，便于日志分析
 
         # 动作执行器映射：动作名 → 对应函数（focus_* 共用 execute_focus_object_action）
         self.action_executors = {
@@ -346,6 +347,47 @@ class MCTSQuestionSample(QuestionSample):
         return response
 
     # ====================== 从问题中提取关键物体 ======================
+    def _filter_key_objects(self, objects):
+        """清洗MCTS候选物体，并可选地约束到scene graph已有物体。"""
+        generic_terms = {
+            'thing', 'things', 'object', 'objects', 'item', 'items', 'photo', 'picture',
+            'image', 'event', 'activity', 'period', 'kind', 'type', 'place', 'area',
+            'scene', 'background', 'foreground', 'what else', 'here', 'there', 'beverage'
+        }
+        cleaned = []
+        for obj in objects:
+            obj = obj.strip().lower()
+            if not obj or obj in generic_terms:
+                continue
+            if obj not in cleaned:
+                cleaned.append(obj)
+
+        if not getattr(self.args, "mcts_filter_objects", False):
+            return cleaned
+
+        candidates = []
+        for obj in self.row.get('candidate_objects', []):
+            obj = str(obj).strip().lower()
+            if obj and obj not in generic_terms and obj not in candidates:
+                candidates.append(obj)
+
+        if not candidates:
+            return cleaned
+
+        aligned = []
+        for obj in cleaned:
+            for cand in candidates:
+                if obj == cand or obj in cand or cand in obj:
+                    if cand not in aligned:
+                        aligned.append(cand)
+                    break
+
+        if not aligned:
+            aligned = candidates[:3]
+            print(f"[extract_key_objects] 对象过滤后为空，回退到scene graph候选: {aligned}")
+
+        return aligned
+
     def extract_key_objects_sync(self):
         """从问题里提取要检测的关键物体（用于视觉专家定位）"""
         question = self.row['question']
@@ -381,6 +423,7 @@ class MCTSQuestionSample(QuestionSample):
             objects = [w for w in fallback if w not in stop_words]
             print(f"[extract_key_objects] LLM返回为空，使用正则fallback: {objects}")
 
+        objects = self._filter_key_objects(objects)
         print(f"[extract_key_objects] parsed objects: {objects}")
         return objects
 
@@ -875,45 +918,48 @@ class MCTSQuestionSample(QuestionSample):
                 print(f"SAM检测物体 '{obj}' 失败: {str(e)}")
 
         print(f"SAM检测到的物体: {detected_objects}")
+        self.detected_objects = detected_objects
 
         # 为每个检测到的物体创建 focus 动作
         self.actions = []
         self.action_objects = {}
         self.action_prompts = {}
+        action_mode = getattr(self.args, "mcts_action_mode", "all")
 
         for obj in detected_objects:
             obj_key = obj.replace(' ', '_')
-            # 原有：渐变高亮
-            focus_name = f"focus_{obj_key}"
-            self.actions.append(focus_name)
-            self.action_objects[focus_name] = obj
-            self.action_prompts[focus_name] = f"Focus on: {obj}"
-            # 新增：裁剪放大（保留真实像素）
-            crop_name = f"crop_{obj_key}"
-            self.actions.append(crop_name)
-            self.action_objects[crop_name] = obj
-            self.action_prompts[crop_name] = f"Crop on: {obj}"
-            # 新增：边界框标注（保留全局上下文）
-            outline_name = f"outline_{obj_key}"
-            self.actions.append(outline_name)
-            self.action_objects[outline_name] = obj
-            self.action_prompts[outline_name] = f"Outline on: {obj}"
+            if action_mode in ("all", "no_crop"):
+                focus_name = f"focus_{obj_key}"
+                self.actions.append(focus_name)
+                self.action_objects[focus_name] = obj
+                self.action_prompts[focus_name] = f"Focus on: {obj}"
 
-        # 追加全局动作
-        self.actions.append("zoom_out")
-        self.action_prompts["zoom_out"] = "Zoom out the region by 1.5x"
-        self.actions.append("pan_left")
-        self.action_prompts["pan_left"] = "Pan left by 25%"
-        self.actions.append("zoom_in_center")
-        self.action_prompts["zoom_in_center"] = "Zoom in center 2x"
+            if action_mode == "all":
+                crop_name = f"crop_{obj_key}"
+                self.actions.append(crop_name)
+                self.action_objects[crop_name] = obj
+                self.action_prompts[crop_name] = f"Crop on: {obj}"
 
-        # 注册全局动作执行器
-        self.action_executors["pan_left"] = self.execute_pan_left_action
-        self.action_executors["zoom_in_center"] = self.execute_zoom_in_center_action
+            if action_mode in ("all", "outline_only", "no_crop"):
+                outline_name = f"outline_{obj_key}"
+                self.actions.append(outline_name)
+                self.action_objects[outline_name] = obj
+                self.action_prompts[outline_name] = f"Outline on: {obj}"
 
-        # 如果没有任何物体被检测到，至少保留全局动作
+        if action_mode in ("all", "no_crop"):
+            self.actions.append("zoom_out")
+            self.action_prompts["zoom_out"] = "Zoom out the region by 1.5x"
+            self.actions.append("pan_left")
+            self.action_prompts["pan_left"] = "Pan left by 25%"
+            self.actions.append("zoom_in_center")
+            self.action_prompts["zoom_in_center"] = "Zoom in center 2x"
+
+            # 注册全局动作执行器
+            self.action_executors["pan_left"] = self.execute_pan_left_action
+            self.action_executors["zoom_in_center"] = self.execute_zoom_in_center_action
+
         if len(detected_objects) == 0:
-            print("警告：未检测到任何物体，仅保留全局动作(zoom_out, pan_left, zoom_in_center)")
+            print(f"警告：未检测到任何物体，动作模式 {action_mode} 下actions={self.actions}")
 
     # ====================== 确保关键物体已提取 ======================
     def _ensure_key_objects(self):

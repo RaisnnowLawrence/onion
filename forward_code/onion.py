@@ -1127,6 +1127,46 @@ class onion:
                 scores[label_map[label]] = score
         return scores
     
+    def _mcts_should_trigger(self, question):
+        mode = getattr(self.args, "mcts_trigger_mode", "all")
+        if mode == "all":
+            return True
+
+        q = question.lower()
+        global_patterns = [
+            "what city", "what country", "what place", "where", "what event",
+            "what activity", "what period", "what time", "why", "used for",
+            "most likely", "what institution", "what kind of resort"
+        ]
+        visual_patterns = [
+            "what color", "how many", "what word", "what is written", "what sign",
+            "what logo", "what brand", "what number", "what letter", "what item",
+            "what object", "what animal", "what kind of animal", "what is on",
+            "what is in", "what is behind", "what is holding", "what is wearing",
+            "what is hanging", "what is made of", "what type of", "which"
+        ]
+
+        if any(pattern in q for pattern in global_patterns):
+            return False
+
+        if mode == "count_color_object_only":
+            narrow_patterns = [
+                "how many", "what color", "which color", "what object",
+                "what item", "what animal", "what food", "what device",
+                "what appliance", "what is on", "what is in", "what is behind",
+                "what is holding", "what is wearing", "what is hanging"
+            ]
+            narrow_exclusions = [
+                "what type", "what kind", "which", "what city", "what country",
+                "what place", "where", "why", "used for", "most likely",
+                "what event", "what activity", "what period", "what time"
+            ]
+            if any(pattern in q for pattern in narrow_exclusions):
+                return False
+            return any(pattern in q for pattern in narrow_patterns)
+
+        return any(pattern in q for pattern in visual_patterns)
+
     def enhance_image_object(self, data_row, obj_list, attr_list):
 
         # 获取样本信息
@@ -1140,6 +1180,10 @@ class onion:
         self.attention_object = list(dict.fromkeys(self.attention_object + obj_list))
         obj_list = list(dict.fromkeys(self.attention_object + obj_list))
 
+        if not self._mcts_should_trigger(question):
+            print(f"MCTS跳过：问题不属于触发模式 {self.args.mcts_trigger_mode}: {question}")
+            return None
+
         # ========== MCTS搜索最优物体增强 ==========
         # 将图像转为base64
         with open(image_path, 'rb') as f:
@@ -1150,7 +1194,8 @@ class onion:
             'image_path': image_path,
             'question': question,
             'answer': data_row['answer'],
-            'index': str(data_row['image_key'])
+            'index': str(data_row['image_key']),
+            'candidate_objects': obj_list
         }
 
         class _TempArgs:
@@ -1158,9 +1203,13 @@ class onion:
             image_size = 1024
             temperature = 0.0
 
+        temp_args = _TempArgs()
+        temp_args.mcts_action_mode = self.args.mcts_action_mode
+        temp_args.mcts_filter_objects = self.args.mcts_filter_objects
+
         mcts_sample = MCTSQuestionSample(
             row=mcts_row,
-            args=_TempArgs(),
+            args=temp_args,
             llm_model=self.model,
             llm_processor=self.processor,
             sam_model=self.sam,
@@ -1176,7 +1225,7 @@ class onion:
         mcts_sample.key_objects = mcts_sample.extract_key_objects_sync()
         mcts_sample._setup_actions()
 
-        if len(mcts_sample.actions) <= 1:
+        if len(mcts_sample.actions) == 0:
             # 未检测到任何物体，回退到原图
             print("MCTS未检测到可增强的物体，使用原图")
             return None
@@ -1544,6 +1593,14 @@ def parser_args():
     parser.add_argument('--use_caption_enhance', action='store_true', help="enable caption enhancement module")
     parser.add_argument('--use_knowledge_enhance', action='store_true', help="enable knowledge enhancement module")
     parser.add_argument('--mcts_n_simulations', type=int, default=20, help="number of MCTS simulations for image enhancement")
+    parser.add_argument('--mcts_trigger_mode', type=str, default='all',
+                        choices=['all', 'visual_detail_only', 'count_color_object_only'],
+                        help='controls which questions can trigger MCTS image enhancement')
+    parser.add_argument('--mcts_action_mode', type=str, default='all',
+                        choices=['all', 'outline_only', 'no_crop'],
+                        help='controls the MCTS image operation set')
+    parser.add_argument('--mcts_filter_objects', action='store_true',
+                        help='filter generic MCTS key objects and align them to selected scene-graph objects')
     parser.add_argument('--use_all_regional_captions', action='store_true',
                         help='inject top regional captions instead of selecting a few objects over multiple rounds')
     parser.add_argument('--max_regional_captions', type=int, default=25,
