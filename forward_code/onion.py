@@ -1597,7 +1597,7 @@ def parser_args():
                         choices=['all', 'visual_detail_only', 'count_color_object_only'],
                         help='controls which questions can trigger MCTS image enhancement')
     parser.add_argument('--mcts_action_mode', type=str, default='all',
-                        choices=['all', 'outline_only', 'no_crop'],
+                        choices=['all', 'outline_only', 'marker_only', 'no_crop'],
                         help='controls the MCTS image operation set')
     parser.add_argument('--mcts_filter_objects', action='store_true',
                         help='filter generic MCTS key objects and align them to selected scene-graph objects')

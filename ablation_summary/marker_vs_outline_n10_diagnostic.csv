@@ -1,0 +1,1146 @@
+sample_id,question,qtype,left_pred,right_pred,left_score,right_score,delta,bucket,left_enhanced,right_enhanced,right_selected_objects
+0,What is in the motorcyclist's mouth?,other,nothing,nothing,0.0,0.0,0.0,same,False,False,helmet;sunglasses;glasses
+1,Which number birthday is probably being celebrated?,text_sign_logo,20,20,0.0,0.0,0.0,same,False,False,bear;number;cake
+2,What best describes the pool of water?,other,calm,calm,0.0,0.0,0.0,same,False,False,water;reflection;mud
+3,What is the white substance on top of the cupcakes?,other,cream,cream,0.3,0.3,0.0,same,False,False,icing;frosting;cream
+4,What type of device is sitting next to the laptop?,what_type_kind,phone,phone,1.0,1.0,0.0,same,False,False,phone;laptop;countertop
+5,The thing on the animal to the left's head is similar to what is on the head of what else?,other,sheep,sheep,0.3,0.3,0.0,same,True,True,sheep;ear;nose
+6,What is the appliance the woman is holding used for?,activity_event,dry hair,dry hair,0.0,0.0,0.0,same,False,False,towel;brush;toilet
+7,What is the descriptive word for this surface?,text_sign_logo,desk,desk,0.6,0.6,0.0,same,False,False,cat;screen;monitor
+8,What is the person on the left doing with their body?,activity_event,riding wave,crouching,0.0,0.6,0.6,right_better,False,False,surfer;wetsuit;board
+9,What type of pants is the man on the right wearing?,what_type_kind,jeans,jeans,1.0,1.0,0.0,same,False,False,jean;pant;plate
+10,What country do these planes belong to?,other,usa,usa,0.6,0.6,0.0,same,False,False,flag;banner;person
+11,What interests the child most here?,other,cupcake,cupcake,0.6,0.6,0.0,same,False,False,candle;flame;dessert
+12,What kind of fruit is cut in half and darker than the other?,what_type_kind,olive,olive,0.3,0.3,0.0,same,False,False,olive;tomato;chicken
+13,What item on the desk could help with a cold?,what_object,cough syrup,cough syrup,0.0,0.0,0.0,same,True,True,bag;napkin;woman
+14,What flag is represented on the wall?,other,american flag,american flag,0.0,0.0,0.0,same,False,False,cake;woman;man
+15,What is located on the shelves?,other,books,books,1.0,1.0,0.0,same,False,False,book;painting;head
+16,What period of the day does this photo reflect?,other,afternoon,afternoon,0.8999999999999999,0.8999999999999999,0.0,same,False,False,clock;tower;sky
+17,What activity does the cat appear most likely to do?,activity_event,eat,eat,0.3,0.3,0.0,same,False,False,cat;reflection;door
+18,What event is this most likely?,activity_event,dinner,dinner,1.0,1.0,0.0,same,False,False,wine;bottle;salad
+19,What is the outside of the cake made of?,other,frost,frost,0.0,0.0,0.0,same,False,False,cake;bag;case
+20,Why is the person wearing a white jacket?,why,chef,chef,1.0,1.0,0.0,same,False,False,shirt;pot;donut
+21,What is the dog trying to catch?,other,frisbee,frisbee,1.0,1.0,0.0,same,False,False,frisbee;man;shoe
+22,Which animal usually occupies the position the cat is in right now?,which,human,human,1.0,1.0,0.0,same,False,False,chair;cat;seat
+23,What kind of resort are these people at?,what_type_kind,ski resort,ski resort,1.0,1.0,0.0,same,False,False,mountain;hill;ground
+24,What type of transportation is this?,what_type_kind,airplane,airplane,1.0,1.0,0.0,same,False,False,airplane;person;ladder
+25,The cat is looking in what direction?,other,down,down,1.0,1.0,0.0,same,False,False,water;faucet;drain
+26,What are the orange vehicles for?,other,ground service,ground service,0.0,0.0,0.0,same,False,False,car;truck;runway
+27,The company producing the device in her hand is from what country?,other,japan,japan,1.0,1.0,0.0,same,False,False,remote;woman;nose
+28,Which is not an ingredient of this dish?,which,butter,wine,0.0,0.0,0.0,same,False,False,glass;knife;hand
+29,What is closest to the tree trunk?,other,bike,bike,0.3,0.3,0.0,same,False,False,seat;bike;shadow
+30,Where are we at?,where,market,market,1.0,1.0,0.0,same,False,False,market;scooter;woman
+31,What is beside the person on the seat?,other,bag,bag,1.0,1.0,0.0,same,False,False,bag;umbrella;sweater
+32,What does it say on the boys hat?,other,happy birthday,happy birthday,1.0,1.0,0.0,same,False,False,hat;boy;tennis racket
+33,What sport are they mimicking?,other,baseball,baseball,1.0,1.0,0.0,same,False,False,ball;stick;woman
+34,The visible bottles most likely contain what kind of items?,what_type_kind,shampoo and conditioner,shampoo and conditioner,0.0,0.0,0.0,same,False,False,bottle;countertop;toilet
+35,What sport game is the man playing?,other,wii,wii,0.3,0.3,0.0,same,False,False,man;controller;television
+36,What is the batter most likely preparing to do here?,activity_event,hit ball,hit ball,0.0,0.0,0.0,same,False,False,bat;glove;catcher
+37,What kind of venue is it?,what_type_kind,kitchen,kitchen,1.0,1.0,0.0,same,False,False,table;sink;cabinet
+38,What kind of terrain is it?,what_type_kind,grass field,grass field,0.0,0.0,0.0,same,False,False,elephant;water;bush
+39,What is the bin on the left made from?,other,metal,metal,1.0,1.0,0.0,same,False,False,container;hay;ground
+40,What type of animal is on a leash on the sidewalk?,what_type_kind,dog,dog,1.0,1.0,0.0,same,False,False,dog;man;person
+41,What room of the house is this man in?,other,bathroom,bathroom,1.0,1.0,0.0,same,False,False,man;person;sink
+42,What is likely in front of the rug?,other,dishwasher,dishwasher,0.0,0.0,0.0,same,False,False,dishwasher;stove;oven
+43,Which food item is the knife for?,which,food,food,0.0,0.0,0.0,same,False,False,mushroom;food;meat
+44,What is the orange container on the left near the man in the red shirt used for?,activity_event,cooling,cooling,0.0,0.0,0.0,same,False,False,cooler;dugout;man
+45,What type of design is the person's shirt?,what_type_kind,tie dye,tie dye,1.0,1.0,0.0,same,False,False,shirt;person;man
+46,What kind of cuisine is this?,what_type_kind,asian,asian,0.8999999999999999,0.8999999999999999,0.0,same,False,False,noodle;broccoli;mushroom
+47,What is on the side of the yellow plane?,other,N4339,N4339,0.0,0.0,0.0,same,True,True,number;letter;stripe
+48,Why are the men's vests orange?,why,safety,safety,1.0,1.0,0.0,same,False,False,man;vest;light
+49,Why would you sit at this table?,why,to eat,to eat,1.0,1.0,0.0,same,False,False,table;cake;food
+50,What type of sinks are shown?,what_type_kind,vanity,vanity,0.0,0.0,0.0,same,False,False,sink;tub;countertop
+51,In what type of environment are they most likely riding skateboards?,what_type_kind,skate park,skate park,0.3,0.3,0.0,same,False,False,man;stair;graffiti
+52,Is the man on the left platform going to board the train?,other,no,no,1.0,1.0,0.0,same,False,False,platform;person;front
+53,This part of the house where is the girl is is called?,where,bedroom,bedroom,1.0,1.0,0.0,same,False,False,woman;bed;headboard
+54,They are likely having pizza at what kind of event?,what_type_kind,party,social gathering,0.8999999999999999,0.0,-0.8999999999999999,left_better,False,False,man;hoodie;jean
+55,What are the people driving?,other,motorcycles,motorcycles,0.8999999999999999,0.8999999999999999,0.0,same,False,False,motorcycle;bike;man
+56,The bus is likely driving through which American city?,which,new york city,new york,0.0,1.0,1.0,right_better,False,False,bus;road;street
+57,What drink might these be good in?,other,smoothie,smoothie,0.8999999999999999,0.8999999999999999,0.0,same,False,False,banana;woman;shirt
+58,What type of parking is available?,what_type_kind,bike,bike,0.8999999999999999,0.8999999999999999,0.0,same,False,False,bicycle;bike;moped
+59,What direction is the narrow end of the flag pointing?,other,north,north,0.3,0.3,0.0,same,False,False,flag;pole;spire
+60,In what nation is this scene located?,other,france,france,1.0,1.0,0.0,same,False,False,girl;woman;building
+61,What festive season are these fruits usually ingested?,other,halloween,holiday season,0.0,0.0,0.0,same,False,False,tangerine;orange;bowl
+62,What are the boats shaped like?,other,carts,cows,0.0,0.0,0.0,same,False,False,boat;water;person
+63,What is the metal basket near the net used to hold?,other,tennis balls,tennis balls,1.0,1.0,0.0,same,False,False,ball;racket;court
+64,What is likely to have happened?,other,fall,fall,0.0,0.0,0.0,same,False,False,man;skier;boot
+65,Which vegetable on the pizza would be risky for someone with a certain allergy?,which,pepper,pepper,0.3,0.3,0.0,same,False,False,pepper;mushroom;pepperoni
+66,Which food has the least carbs?,which,soup,soup,1.0,1.0,0.0,same,False,False,lettuce;soup;salad
+67,What vehicle is closest to the security guard?,other,scooter,scooter,0.8999999999999999,0.8999999999999999,0.0,same,False,False,scooter;car;wheel
+68,Why are the men wearing yellow vests?,why,work,work,0.0,0.0,0.0,same,False,False,vest;person;house
+69,What is the skateboard balanced on?,other,fence,fence,0.3,0.3,0.0,same,False,False,pole;sidewalk;park
+70,What is the object in the middle called?,other,counter,counter,0.0,0.0,0.0,same,False,False,sink;bar stool;countertop
+71,What is the gray street made up of?,other,brick,brick,0.3,0.3,0.0,same,False,False,tire;bike;person
+72,The name of the street is the same as the last name of what actress?,other,green,green,0.6,0.6,0.0,same,False,False,sign;pole;road
+73,How was the cake decorated?,other,red flowers,red flowers,0.0,0.0,0.0,same,False,False,cake;rose;layer
+74,The green object on the smaller boat is used as what?,other,container,container,0.0,0.0,0.0,same,False,False,container;building;object
+75,Who has the same color hair as this woman?,color,no one,no one,0.6,0.6,0.0,same,False,False,man;woman;person
+76,Why would you use this bag?,why,travel,travel,0.8999999999999999,0.8999999999999999,0.0,same,False,False,suitcase;bag;luggage
+77,What is being made by the man?,other,kite,kite,1.0,1.0,0.0,same,False,False,kite;man;person
+78,What is the man in the gray suit on the left looking down to check?,other,phone,phone,1.0,1.0,0.0,same,False,False,hand;suit;watch
+79,Which ingredient is the most flavorful?,which,broccoli,broccoli,0.3,0.3,0.0,same,False,False,meat;mushroom;chicken
+80,What are these cases for?,other,travel,travel,1.0,1.0,0.0,same,False,False,suitcase;bag;jacket
+81,What pattern are the man's pants?,other,camouflage,camouflage,0.6,0.6,0.0,same,False,False,pant;shirt;shoe
+82,In which major city is the woman most likely sitting outdoors?,activity_event,paris,paris,1.0,1.0,0.0,same,False,False,woman;girl;building
+83,Where are these animals located?,where,field,field,0.3,0.3,0.0,same,False,False,giraffe;tree;sky
+84,In what location is the motorcycle parked most likely?,activity_event,garage,garage,1.0,1.0,0.0,same,False,False,floor;motorcycle;tire
+85,What is the natural light streaming into the room through?,other,clock,clock,1.0,1.0,0.0,same,False,False,clock;ceiling;room
+86,What is the white cream used for with the other foods?,activity_event,dip,dip,1.0,1.0,0.0,same,False,False,cream;carrot;broccoli
+87,What can be seen through the buildings?,other,sun,sun,1.0,1.0,0.0,same,False,False,sky;car;road
+88,What type of audience is the man likely speaking to?,what_type_kind,business,business,0.3,0.3,0.0,same,False,False,man;mouth;sofa
+89,What will be built here one day?,other,building,building,1.0,1.0,0.0,same,False,False,building;street;truck
+90,What seems to be contained in the nook underneath the TV?,other,fireplace,fireplace,1.0,1.0,0.0,same,False,False,fireplace;shelf;screen
+91,What problem will the people on the ferry face?,other,stormy weather,stormy weather,0.0,0.0,0.0,same,False,False,water;bridge;motor
+92,Why do the cattle have their heads down to the ground?,why,eating,eating,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cow;hay;head
+93,What state was the licence plate issues?,other,california,california,0.0,0.0,0.0,same,False,False,license plate;sidewalk;motorcycle
+94,What are the people in the picture doing?,activity_event,skiing,skiing,1.0,1.0,0.0,same,False,False,skier;ski;hill
+95,What type of city district is this?,what_type_kind,downtown,downtown,0.6,0.6,0.0,same,False,False,woman;person;sidewalk
+96,What player is shown in the photo?,other,pitcher,pitcher,1.0,1.0,0.0,same,False,False,man;arm;hand
+97,Where are these cats located?,where,floor,floor,0.3,0.3,0.0,same,False,False,cat;floor;carpet
+98,What is prohibited near the round road sign with a red cross on a blue background?,text_sign_logo,turning,turning,0.0,0.0,0.0,same,False,False,motorcycle;scooter;road
+99,Where is this dog located?,where,chair,chair,1.0,1.0,0.0,same,False,False,dog;chair;nose
+100,Who is the woman dressed up as?,other,queen,queen,0.6,0.6,0.0,same,False,False,woman;face;beard
+101,What type of event might this be?,what_type_kind,car show,car show,0.0,0.0,0.0,same,False,False,car;doll;person
+102,What is the activity being performed?,activity_event,riding,riding,0.6,0.6,0.0,same,False,False,horse;man;reign
+103,What color are the walls in the room?,color,green,green,1.0,1.0,0.0,same,True,True,wall;ceiling;room
+104,In which way are the adults shown here likely related to the child?,which,parents,parents,1.0,1.0,0.0,same,False,False,man;woman;girl
+105,What is served at the counter here?,other,alcohol,alcohol,1.0,1.0,0.0,same,False,False,bottle;glass;lamp
+106,What type of tree is in front of the blue building?,what_type_kind,palm,palm,1.0,1.0,0.0,same,False,False,tree;tent;building
+107,What did the man use to get into the air?,other,kite,kite,0.6,0.6,0.0,same,False,False,kite;string;rope
+108,What type of cuisine would be purchased here?,what_type_kind,tamales,tamales,0.6,0.6,0.0,same,False,False,woman;person;man
+109,What type of bus is in traffic?,what_type_kind,school bus,school bus,1.0,1.0,0.0,same,False,False,bus;car;tire
+110,In what shape is the quiche cut?,other,triangle,triangle,1.0,1.0,0.0,same,False,False,slice;bean;lettuce
+111,What kind of coating has been used?,what_type_kind,glaze,glaze,0.0,0.0,0.0,same,False,False,donut;chocolate;hole
+112,Which century was the item the woman is holding up invented in?,which,20th,20th,0.3,0.3,0.0,same,False,False,woman;controller;bag
+113,What genus of animal is visible here?,other,snow leopard,snow leopard,0.0,0.0,0.0,same,False,False,monitor;screen;tree
+114,What brand is the red truck?,text_sign_logo,dodge,dodge,1.0,1.0,0.0,same,False,False,truck;grill;headlight
+115,This meal was likely prepared using which method?,which,grilled,grilled,0.3,0.3,0.0,same,False,False,meat;vegetable;food
+116,The cat appears to be what type?,what_type_kind,black and white,black and white,0.0,0.0,0.0,same,False,False,cat;collar;laptop
+117,What limits forward navigation?,other,car,car,0.0,0.0,0.0,same,False,False,car;truck;van
+118,What are the zebras doing?,activity_event,eating,eating,1.0,1.0,0.0,same,False,False,zebra;head;nose
+119,Why are the people behind the fence there?,why,safety,to keep people out,0.0,0.0,0.0,same,False,False,fence;bike;bicycle
+120,Which piece of clothing is unique to one person here?,which,green shirt,green shirt,0.0,0.0,0.0,same,False,False,tie;shirt;suit
+121,What type of container is the straw sticking out of?,what_type_kind,mason jar,mason jar,0.8999999999999999,0.8999999999999999,0.0,same,False,False,jar;vase;petal
+122,A person following what kind of diet is least likely to eat this meal?,what_type_kind,vegetarian,vegan,1.0,0.0,-1.0,left_better,False,False,donut;banana;gravy
+123,What is placed on the ground that will eventually turn yellow?,other,bananas,bananas,1.0,1.0,0.0,same,False,False,banana;vegetable;ground
+124,What is in the bottles?,other,coffee,beer,0.0,0.0,0.0,same,True,True,coffee;sandwich;bread
+125,Which food on the plate grows in the ground?,which,broccoli,broccoli,0.0,0.0,0.0,same,False,False,carrot;broccoli;cucumber
+126,What theme park attraction are they most likely visiting?,activity_event,disneyland,disneyland,1.0,1.0,0.0,same,False,False,trolley;carriage;person
+127,What is in the photo above the TV?,other,hat,hat,0.0,0.0,0.0,same,False,False,hat;picture;cabinet
+128,The temperature outside is likely what range?,other,cold,cold,1.0,1.0,0.0,same,False,False,man;hat;jacket
+129,What kind of weather was there?,what_type_kind,rainy,rainy,0.8999999999999999,0.8999999999999999,0.0,same,False,False,reflection;sky;propeller
+130,What is the facade that the couple is being interviewed in likely designed to be?,other,tv,tv,0.3,0.3,0.0,same,False,False,bus;window;seat
+131,What level of a house is this room located in?,other,basement,basement,1.0,1.0,0.0,same,False,False,floor;room;carpet
+132,What type of birds are these?,what_type_kind,seagulls,seagulls,1.0,1.0,0.0,same,False,False,bird;water;sky
+133,What country headquarters this plane company?,other,uk,uk,0.3,0.3,0.0,same,False,False,tail;logo;airport
+134,What other sport besides ping pong is played by someone in this household?,other,tennis,tennis,1.0,1.0,0.0,same,False,False,racket;bag;bottle
+135,Which team is on offense?,which,red team,red team,0.0,0.0,0.0,same,False,False,man;soccer ball;hand
+136,What object should never get wet?,what_object,umbrella,laptop,0.3,1.0,0.7,right_better,True,True,umbrella;laptop;jacket
+137,What do the larger elephants still have intact?,other,tusks,tusks,1.0,1.0,0.0,same,False,False,tusk;trunk;head
+138,What kind of room is on the left of the yellow train?,what_type_kind,waiting room,waiting room,1.0,1.0,0.0,same,False,False,building;wall;roof
+139,Which vehicle is closest to the rectangular blue sign?,text_sign_logo,bus,bus,1.0,1.0,0.0,same,False,False,bus;sign;building
+140,What vehicle is shown in the photo?,other,jet,jet,0.3,0.3,0.0,same,False,False,airplane;wing;tail
+141,What kind of bag is this?,what_type_kind,suitcase,suitcase,1.0,1.0,0.0,same,False,False,suitcase;bag;backpack
+142,Why are the wood platforms strapped to the elephants?,why,to carry passengers,to carry people,0.0,0.0,0.0,same,False,False,elephant;seat;cloth
+143,What is the train riding on?,other,tracks,tracks,0.8999999999999999,0.8999999999999999,0.0,same,False,False,track;gravel;train car
+144,What is the man taking?,other,picture,picture,1.0,1.0,0.0,same,False,False,camera;bike;bicycle
+145,What item is on the bottom shelf near the TV?,what_object,speaker,speaker,0.6,0.6,0.0,same,True,True,tray;table;cabinet
+146,What city is mentioned on the front of the bus?,other,seattle,seattle,1.0,1.0,0.0,same,False,False,bus;sign;street
+147,What expression are these children making?,other,smile,smile,0.6,0.6,0.0,same,False,False,girl;hand;eye
+148,What video game system is the boy playing on?,other,wii,wii,1.0,1.0,0.0,same,False,False,boy;child;man
+149,What does Fidelity specialize in?,other,investments,investments,1.0,1.0,0.0,same,False,False,sign;building;woman
+150,Which is the fruit?,which,right bowl,right bowl,0.0,0.0,0.0,same,False,False,orange;carrot;candy
+151,What is the green box near the red stapler on the desk used to hold?,other,tissues,tissues,1.0,1.0,0.0,same,False,False,stapler;box;table
+152,How many bake pans were utilized?,how_many,0,3,0.0,0.0,0.0,same,True,True,cake;layer;tine
+153,What are some of the zebras standing in in the middle of the photo?,other,water,water,0.8999999999999999,0.8999999999999999,0.0,same,False,False,zebra;water;leg
+154,How many people have their arms around the woman?,how_many,1,1,0.0,0.0,0.0,same,True,True,man;leg;foot
+155,What city name is shown in the background?,other,omaha,omaha,1.0,1.0,0.0,same,False,False,banner;hat;letter
+156,What is the dark colored car to the far left in the middle doing?,activity_event,driving,driving,0.6,0.6,0.0,same,False,False,bus;car;person
+157,Are the people boarding this train?,other,no,no,0.0,0.0,0.0,same,False,False,man;bicycle;bike
+158,What is purpose of this wooden board?,other,sign,sign,0.0,0.0,0.0,same,False,False,sign;bear;man
+159,What video game system is the man playing?,other,wii,wii,1.0,1.0,0.0,same,False,False,man;controller;hoodie
+160,Where are the buses with blue trim probably assembled?,where,factory,factory,0.3,0.3,0.0,same,False,False,building;road;pole
+161,What kind of pizza is this?,what_type_kind,margherita,margherita,0.6,0.6,0.0,same,False,False,pizza;cheese;sauce
+162,When it comes to the child what is he or she doing?,activity_event,skateboarding,skateboarding,0.8999999999999999,0.8999999999999999,0.0,same,False,False,boy;skateboard;pant
+163,What is the small house behind the cattle made up of?,other,stone,stone,1.0,1.0,0.0,same,False,False,building;roof;wall
+164,What type of transportation is shown?,what_type_kind,train,train,1.0,1.0,0.0,same,False,False,train;smoke;track
+165,What is the little girl doing?,activity_event,eating,eating,1.0,1.0,0.0,same,False,False,hand;mouth;nose
+166,What type of area is shown?,what_type_kind,parking lot,parking lot,0.0,0.0,0.0,same,False,False,bus;car;road
+167,What appliance is unhooked and placed by the sink?,what_object,stove,stove,1.0,1.0,0.0,same,True,True,oven;stove;countertop
+168,Which food on the dish is a meat?,which,chicken,chicken,1.0,1.0,0.0,same,False,False,fork;potato;bread
+169,Which body part of the cow could you look at to find out which identity and/or owner the cow has?,which,ear,ear,1.0,1.0,0.0,same,False,False,ear;face;eye
+170,Who is the manufacturer of this laptop?,other,HP,HP,1.0,1.0,0.0,same,False,False,laptop;logo;keyboard
+171,What is the person using to eat the pizza?,other,fork,fork,1.0,1.0,0.0,same,False,False,fork;knife;slice
+172,What are the white rocks for?,other,track bed,track bed,0.0,0.0,0.0,same,False,False,track;train car;person
+173,What animal has similar color to the flower in the picture on the left side of the room?,color,none,none,0.0,0.0,0.0,same,True,True,flower;plant;pillow
+174,What other animal is this animal traditionally an enemy of?,other,cat,cat,1.0,1.0,0.0,same,False,False,fish;neck;roof
+175,What left the blue marks on the ground near the fire hydrant?,other,hydrant,hydrant,0.0,0.0,0.0,same,False,False,fire hydrant;chain;paint
+176,What kind of a person usually eats food like this?,what_type_kind,health conscious,health nut,0.0,0.0,0.0,same,False,False,rice;spinach;vegetable
+177,Which person would be the coldest?,which,left,man on left,0.3,0.0,-0.3,left_better,False,False,woman;head;cap
+178,What pattern is on the bottom of the skateboard?,other,zig zag,zig zag,0.0,0.0,0.0,same,False,False,skateboard;wheel;ramp
+179,How many drinkers are sucking down their beverages?,how_many,0,0,0.0,0.0,0.0,same,False,True,person;glass;juice
+180,What does the taller bottle contain?,other,water,water,1.0,1.0,0.0,same,False,False,bottle;racket;shoe
+181,How do these people know each other?,other,classmates,classmates,1.0,1.0,0.0,same,False,False,boy;girl;tie
+182,What might you mix with the alcoholic drink named?,other,water,water,0.0,0.0,0.0,same,False,False,person;man;camera
+183,What type of vehicle is this?,what_type_kind,bus,bus,1.0,1.0,0.0,same,False,False,bus;car;sidewalk
+184,What material are the white cups?,other,plastic,plastic,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cup;glasses;man
+185,What color is the floor?,color,brown,brown,1.0,1.0,0.0,same,True,True,floor;leg;boy
+186,What is placed inside this meter?,other,coins,coins,1.0,1.0,0.0,same,False,False,sign;display;screen
+187,What appliance is shown?,what_object,toaster,toaster,1.0,1.0,0.0,same,True,True,toaster;spoon;whisk
+188,Why does the couple standing in the boat?,why,fish,not enough info,0.0,0.0,0.0,same,False,False,person;mast;pole
+189,What cultural clothing are the women wearing?,other,kimono,traditional,0.6,0.0,-0.6,left_better,False,False,person;ground;tail
+190,How did the animal on the car arrive there?,other,walked,walked,0.0,0.0,0.0,same,False,False,bird;hood;car
+191,What is in the glass?,other,wine,wine,1.0,1.0,0.0,same,True,True,wine;bread;food
+192,What area of the house is this in?,other,basement,basement,1.0,1.0,0.0,same,False,False,man;person;toilet
+193,The top shelf has many books of the same author of what genre?,other,nonfiction,fiction,0.0,0.0,0.0,same,False,False,book;shelf;wall
+194,How many women are in the picture?,how_many,four,4,1.0,0.0,-1.0,left_better,True,True,woman;sweater;pizza
+195,The couch is located where?,where,right,right,0.3,0.3,0.0,same,False,False,couch;rug;radiator
+196,What type of travel is this vehicle for?,what_type_kind,air travel,air travel,0.6,0.6,0.0,same,False,False,airplane;airport;tarmac
+197,Where are the people laying?,where,beach,beach,1.0,1.0,0.0,same,False,False,sand;beach;towel
+198,What are the horses being used for?,activity_event,plow,plow,0.0,0.0,0.0,same,False,False,horse;man;ground
+199,What kind of door is open so she can sit inside?,what_type_kind,refrigerator,refrigerator,1.0,1.0,0.0,same,False,False,refrigerator;door;woman
+200,What is the woman using the umbrella to protect herself from?,other,sun,sun,1.0,1.0,0.0,same,False,False,back;woman;walkway
+201,What property does the blue and green fence have?,other,waterproof,colorful,0.0,0.0,0.0,same,False,False,tarp;jacket;coat
+202,What occasion are the bears probably sitting at the table enjoying?,other,christmas,christmas,1.0,1.0,0.0,same,False,False,bear;christmas tree;plate
+203,Why is the cow tied to the pole?,why,to keep it from wandering off,not tied,0.0,0.0,0.0,same,False,False,cow;pole;head
+204,What super hero is the cake based off?,other,spiderman,spiderman,1.0,1.0,0.0,same,False,False,boy;woman;face
+205,What is the man with the black glove about to do?,other,pitch,pitch,0.8999999999999999,0.8999999999999999,0.0,same,False,False,man;uniform;hat
+206,Why is his arm up in the air?,why,hitting ball,hitting ball,0.3,0.3,0.0,same,False,False,ball;man;cap
+207,What animal is next to the baby animal?,what_object,cow,cow,1.0,1.0,0.0,same,True,True,cow;calf;trailer
+208,What do people do with the items purchased at this corner?,other,eat,eat,1.0,1.0,0.0,same,False,False,bag;jean;street
+209,Which snowboarder will have a harder time standing up?,which,back one,farthest away,0.3,0.0,-0.3,left_better,False,False,man;person;snowboard
+210,If this is a grand slam which must it be?,which,wimbledon,wimbledon,1.0,1.0,0.0,same,False,False,woman;person;court
+211,What is hanging on the right wall next the desk?,other,jackets,jacket,1.0,0.0,-1.0,left_better,False,True,toy;computer;laptop
+212,What fruit is the clock shaped as?,other,apple,apple,1.0,1.0,0.0,same,False,False,clock;table;plant
+213,What is the most likely age of the person?,activity_event,elderly,elderly,0.0,0.0,0.0,same,False,False,woman;hair;flower
+214,What kind of bus is this?,what_type_kind,tata,tata,0.3,0.3,0.0,same,False,False,bus;person;road
+215,Which vegetable in this soup is heart shaped?,which,carrot,carrot,1.0,1.0,0.0,same,False,False,carrot;vegetable;mushroom
+216,Where were these pieces of fruit likely purchased?,where,grocery store,grocery store,0.8999999999999999,0.8999999999999999,0.0,same,False,False,orange;banana;table
+217,These horses are used for what?,activity_event,plowing,plowing,0.8999999999999999,0.8999999999999999,0.0,same,False,False,horse;man;person
+218,What type of shelves are these?,what_type_kind,metal,metal,0.3,0.3,0.0,same,False,False,shelf;rack;display
+219,What type of venue might this be?,what_type_kind,airport,airport,1.0,1.0,0.0,same,False,False,person;woman;man
+220,Which vehicle is closest to the transport hub?,which,red car,red car,0.0,0.0,0.0,same,False,False,car;sign;truck
+221,What are the people tying?,other,kite,kite,1.0,1.0,0.0,same,False,False,kite;boy;string
+222,What is the man riding?,other,skateboard,skateboard,1.0,1.0,0.0,same,False,False,skateboard;ramp;man
+223,Who might be helping the girl?,other,mother,no one,0.3,0.0,-0.3,left_better,False,False,girl;hand;tray
+224,What type of container is near the benches?,what_type_kind,trash can,trash can,0.3,0.3,0.0,same,False,False,trash can;man;person
+225,What type of sign is visible?,what_type_kind,stop sign,stop sign,1.0,1.0,0.0,same,False,False,stop sign;traffic light;car
+226,What other sports might be played on this surface?,other,snowboarding,snowboarding,0.8999999999999999,0.8999999999999999,0.0,same,False,False,ski;track;trail
+227,Given the position of the bat and ball the batter most likely?,activity_event,hit ball,hit ball,0.0,0.0,0.0,same,False,False,bat;baseball;ball
+228,What industry is this man likely working in?,other,food,food,1.0,1.0,0.0,same,False,False,kitchen;microwave;head
+229,What is needed to control the large object?,other,string,string,1.0,1.0,0.0,same,False,False,boy;person;goal
+230,What kind of fruit is used for decorating?,what_type_kind,oranges,oranges,1.0,1.0,0.0,same,False,False,orange;fruit;pitcher
+231,Where does this fruit grow?,where,tree,tree,1.0,1.0,0.0,same,False,False,apple;man;face
+232,What indicates a baby is present?,other,sippy cup,sippy cup,0.6,0.6,0.0,same,False,False,cup;straw;curtain
+233,What social activity might this person engage in at night this day?,activity_event,parade,parade,0.0,0.0,0.0,same,False,False,woman;dog;car
+234,What leavening is used in this item?,other,yeast,yeast,1.0,1.0,0.0,same,False,False,pizza;crust;cheese
+235,What meal might be eaten at the time shown on the clock?,other,lunch,lunch,0.0,0.0,0.0,same,False,False,glass;bottle;mouse
+236,What is the relationship of the people at the back to the man wearing an orange hat?,other,passengers,passengers,0.6,0.6,0.0,same,False,False,carriage;woman;man
+237,What are these women controlling?,other,remotes,wii controllers,0.0,0.0,0.0,same,False,False,controller;remote;girl
+238,How many different devices can show a picture?,how_many,3,4,0.0,0.0,0.0,same,True,True,laptop;monitor;screen
+239,What kind of bike is this?,what_type_kind,scooter,scooter,1.0,1.0,0.0,same,False,False,bike;woman;plant
+240,What type of dinnerware do the people seem to be using?,what_type_kind,plates,plates,0.3,0.3,0.0,same,False,False,plate;glasses;glass
+241,Why is the man holding an umbrella?,why,rain,rain,0.8999999999999999,0.8999999999999999,0.0,same,False,False,umbrella;man;jacket
+242,This railcar is travelling at what position relative to the street-level?,other,above,above,0.0,0.0,0.0,same,False,False,platform;poster;jacket
+243,The guy on the beach towel is readying the item to do what with it most likely?,activity_event,fly,fly,0.8999999999999999,0.8999999999999999,0.0,same,False,False,kite;cap;leg
+244,What might be drunk from this glasses?,other,wine,wine,1.0,1.0,0.0,same,False,False,glass;fork;knife
+245,Which territory is this area located?,which,england,england,0.8999999999999999,0.8999999999999999,0.0,same,False,False,bus;sign;person
+246,What type of region is this likely?,what_type_kind,kitchen,kitchen,1.0,1.0,0.0,same,False,False,woman;table;plate
+247,The man is looking in what direction?,other,left,left,0.0,0.0,0.0,same,False,False,kite;sky;string
+248,This person in this picture is likely to be a?,other,woman,woman,0.0,0.0,0.0,same,False,False,woman;person;bottom
+249,Which flavor most closely describes the bright yellow stuff?,which,mustard,mustard,1.0,1.0,0.0,same,False,False,mustard;hot dog;bun
+250,What city is this location?,other,tokyo,tokyo,0.3,0.3,0.0,same,False,False,woman;building;sidewalk
+251,What is the name of the sport the man is participating in?,other,water skiing,water skiing,0.3,0.3,0.0,same,False,False,man;rope;surfboard
+252,What is the shape on top of the cake?,other,heart,heart,0.0,0.0,0.0,same,False,False,heart;woman;person
+253,How many guests have checked into this room?,how_many,0,0,0.0,0.0,0.0,same,False,False,bed;ceiling fan;trash can
+254,What type of vehicles are sitting outside of the store?,what_type_kind,motorcycles,motorcycles,1.0,1.0,0.0,same,False,False,motorcycle;woman;man
+255,What is the number mentioned in the t shirt of the girl who is playing?,text_sign_logo,21,21,1.0,1.0,0.0,same,False,False,girl;jersey;hand
+256,Where is the horse currently located?,where,barn,barn,1.0,1.0,0.0,same,False,False,horse;woman;ground
+257,What is the person on this vase doing?,activity_event,riding horses,riding horses,0.0,0.0,0.0,same,False,False,man;person;vase
+258,What kind of show is the man on?,what_type_kind,news,news,0.3,0.3,0.0,same,False,False,television;screen;suit
+259,What animals are in the front of the photo?,other,horses,horses,1.0,1.0,0.0,same,True,True,horse;planter;man
+260,What treat can be made with this fruit and ice cream?,other,banana split,banana split,1.0,1.0,0.0,same,False,False,banana;fruit;mug
+261,What are the ski poles used for?,activity_event,skiing,skiing,0.3,0.3,0.0,same,False,False,man;person;jacket
+262,What is the rectangular object in the back left used to do?,other,refrigerate,refrigerate,0.0,0.0,0.0,same,False,False,refrigerator;microwave;cabinet
+263,Which car hold the most people?,which,bus,bus,0.3,0.3,0.0,same,False,False,car;woman;windshield
+264,Where do the men work?,where,airport,airport,1.0,1.0,0.0,same,False,False,airport;luggage;cart
+265,Why is the man jumping on the red pipe?,why,for fun,for fun,0.6,0.6,0.0,same,False,False,pipe;man;ski pole
+266,Which height he jumps?,which,high,high,0.8999999999999999,0.8999999999999999,0.0,same,False,False,ramp;boy;man
+267,How many vehicles have their lights on?,how_many,1,1,0.0,0.0,0.0,same,True,True,car;bicycle;headlight
+268,What comic book hero is sitting on top of the TV?,other,spiderman,spiderman,1.0,1.0,0.0,same,False,False,figurine;toy;game
+269,What type of league is the batter in?,what_type_kind,little league,little league,0.6,0.6,0.0,same,False,False,boy;person;uniform
+270,What time in approximately 31 minutes?,other,7:31,6:31,0.0,0.0,0.0,same,False,False,clock;woman;face
+271,What is on the laps of each of the women?,other,handbag,handbag,0.3,0.3,0.0,same,True,True,purse;book;jacket
+272,What do people gain when they eat too many of these?,other,weight,weight,1.0,1.0,0.0,same,False,False,donut;food;table
+273,What room is this most likely to be happening in?,activity_event,living room,living room,1.0,1.0,0.0,same,False,False,couch;tray;remote
+274,What is the man on TV doing?,activity_event,singing,singing,1.0,1.0,0.0,same,False,False,television;man;microphone
+275,The yellow truck on the sidewalk is concerned with what activity?,activity_event,food,food,0.8999999999999999,0.8999999999999999,0.0,same,False,False,truck;sidewalk;tire
+276,What type of buildings are located here?,what_type_kind,houses,houses,1.0,1.0,0.0,same,False,False,building;car;sidewalk
+277,What is in front of the monitor?,other,keyboard,keyboard,0.8999999999999999,0.8999999999999999,0.0,same,True,True,keyboard;mouse;laptop
+278,What are these types of candles called?,other,tea light,tea light,0.0,0.0,0.0,same,False,False,candle;flame;glass
+279,What color phone does the woman in the blue outfit have?,color,green,silver,0.0,0.0,0.0,same,True,True,person;man;hat
+280,What is this dish being cooked in?,other,pan,pan,0.3,0.3,0.0,same,False,False,pan;pot;stove
+281,How do we know this woman is at work?,other,uniform,uniform,1.0,1.0,0.0,same,False,False,shirt;button;collar
+282,What is the closest item providing light?,other,candle,candle,1.0,1.0,0.0,same,False,False,candle;lamp;candle holder
+283,The people on laptops seem most likely to be part of what group?,activity_event,student,student,0.0,0.0,0.0,same,False,False,laptop;person;man
+284,How would you cut the vegetables?,other,peeler,peeler,0.6,0.6,0.0,same,False,False,knife;carrot;beet
+285,Is the man going to the mountain in the background?,other,yes,yes,0.0,0.0,0.0,same,False,False,man;mountain;suitcase
+286,What type of animals are on the grass?,what_type_kind,zebras,zebras,1.0,1.0,0.0,same,False,False,zebra;tree;dirt
+287,What does the cat have his paw up against?,other,desk,desk,1.0,1.0,0.0,same,False,False,drawer;cabinet;remote control
+288,The glasses contain only this beverage type?,other,beer,beer,1.0,1.0,0.0,same,False,False,glass;cup;bottle
+289,What is keeping the animals all in one place?,other,fence,fence,1.0,1.0,0.0,same,False,False,fence;grass;dog
+290,What season of the year is shown here?,other,winter,winter,0.8999999999999999,0.8999999999999999,0.0,same,False,False,light;person;bicycle
+291,Whos is sitting in the chair?,other,man and child,man and child,0.0,0.0,0.0,same,False,False,man;girl;chair
+292,What pattern shirt is the man wearing?,other,striped,striped,1.0,1.0,0.0,same,False,False,shirt;stripe;arm
+293,How many buses are shown in the streets?,how_many,1,2,0.0,0.0,0.0,same,True,True,bus;truck;person
+294,What brand of soda is the can in the car?,text_sign_logo,coca cola,dr pepper,0.0,0.0,0.0,same,False,False,window;car;windshield
+295,What type of transportation is this?,what_type_kind,bus,bus,1.0,1.0,0.0,same,False,False,bus;person;passenger
+296,What is the stuffed animal touching instead of the tennis player?,other,wall,wall,0.0,0.0,0.0,same,False,False,hat;wristband;wrist
+297,What type of shot is the woman about to hit?,what_type_kind,forehand,overhand,1.0,0.0,-1.0,left_better,False,False,racket;ball;woman
+298,What type of road structure is near?,what_type_kind,stop sign,stop sign,0.6,0.6,0.0,same,False,False,stop sign;sign;road
+299,What material is the squared off building in the background made from?,other,concrete,concrete,0.8999999999999999,0.8999999999999999,0.0,same,False,False,building;tower;man
+300,How many people can sit at the table?,how_many,4,4,0.0,0.0,0.0,same,True,True,chair;table;placemat
+301,The bag which the cat is standing is used for what?,activity_event,travel,carry,1.0,0.0,-1.0,left_better,False,False,suitcase;strap;floor
+302,Why is the person using an umbrella?,why,shade,shade,0.3,0.3,0.0,same,False,False,umbrella;person;ocean
+303,What does the man have on his head?,other,headphones,headphones,1.0,1.0,0.0,same,False,False,headphone;head;hair
+304,What type of bottles are on the table?,what_type_kind,beer,beer,1.0,1.0,0.0,same,False,False,bottle;man;woman
+305,How many skateboards are in the picture?,how_many,2,2,0.0,0.0,0.0,same,True,True,skateboard;man;foot
+306,What does the electric street sign say?,text_sign_logo,spokane fall st,spokane fall st,0.0,0.0,0.0,same,False,False,sign;woman;man
+307,What type items are in the rolled item here?,what_type_kind,clothes,clothes,0.8999999999999999,0.8999999999999999,0.0,same,False,False,suitcase;woman;shoe
+308,In what type of location are they playing with the body board?,what_type_kind,room,room,0.8999999999999999,0.8999999999999999,0.0,same,False,False,board;tank top;surfboard
+309,What kind of footwear is the walker wearing?,what_type_kind,shoes,shoes,1.0,1.0,0.0,same,False,False,shoe;person;leg
+310,Which fruit can hurt your eyes if you peel it holding your face too close to it?,which,banana,banana,0.0,0.0,0.0,same,False,False,orange;banana;mango
+311,What are towels generally made of?,other,cotton,cotton,1.0,1.0,0.0,same,False,False,towel;stove;oven
+312,Where are the cats sitting on top of?,where,table,table,0.8999999999999999,0.8999999999999999,0.0,same,False,False,table;keyboard;computer
+313,What type of dog is it?,what_type_kind,labrador,labrador,0.0,0.0,0.0,same,False,False,dog;sail;railing
+314,They are likely sitting down to enjoy what meal of the day?,other,breakfast,breakfast,1.0,1.0,0.0,same,False,False,man;fork;cup
+315,How many people have skateboards?,how_many,1,2,0.0,0.0,0.0,same,True,True,boy;skateboard;shoe
+316,The most abundant cake has a topping with which color?,color,blue,blue,0.0,0.0,0.0,same,False,False,cake;flag;knife
+317,What animals are in the field?,other,zebras,zebras,1.0,1.0,0.0,same,True,True,zebra;animal;herd
+318,What is this umbrella used for?,activity_event,lighting,lighting,1.0,1.0,0.0,same,False,False,umbrella;pole;stand
+319,What family member in a household would this room most likely belong to?,activity_event,teenager,teenager,0.0,0.0,0.0,same,False,False,television;screen;picture
+320,What is the man's left hand holding?,other,skateboard,skateboard,1.0,1.0,0.0,same,False,False,skateboard;camera;head
+321,Who would sit here?,other,employee,employee,0.8999999999999999,0.8999999999999999,0.0,same,False,False,chair;monitor;desk
+322,What is the cat playing with?,other,knife,knife,1.0,1.0,0.0,same,False,False,knife;blade;paw
+323,The piece of clothing the woman in the picture is wearing on her hands normally serves what purpose?,other,protect,protect,0.0,0.0,0.0,same,False,False,woman;coat;short
+324,What is on the umbrella?,other,whales,whale,1.0,0.8999999999999999,-0.10000000000000009,left_better,True,True,heart;girl;hand
+325,What police force does the police car behind the truck belong to probably?,other,new york,new york,0.3,0.3,0.0,same,False,False,truck;woman;flag
+326,What apparel company is sponsoring the tennis match?,other,uniquel,unicef,0.0,0.0,0.0,same,False,False,shirt;cap;wristband
+327,What is the weather like?,other,rainy,rainy,1.0,1.0,0.0,same,False,False,umbrella;person;head
+328,What action is the woman probably getting ready to perform with her phone?,other,take picture,take picture,0.0,0.0,0.0,same,False,False,phone;face;lip
+329,What kind of car is it?,what_type_kind,silver,silver,0.0,0.0,0.0,same,False,False,car;tire;windshield
+330,What sort of surface/substance does the conveyance with a problem here move upon?,other,road,asphalt,0.3,0.0,-0.3,left_better,False,False,car;person;road
+331,What is the purpose of the two tallest structures?,other,construction,construction,0.8999999999999999,0.8999999999999999,0.0,same,False,False,crane;building;tower
+332,What is the vehicle in front of the cars?,other,van,van,0.0,0.0,0.0,same,False,False,car;bike;bicycle
+333,The thing on the ceiling performs what function?,other,fan,fan,0.3,0.3,0.0,same,False,False,fan;lamp;top
+334,Why do people have their arms up?,why,catch frisbee,catch frisbee,0.6,0.6,0.0,same,False,False,frisbee;arm;person
+335,How many lights are visible in the room?,how_many,2,2,0.0,0.0,0.0,same,True,True,lamp;curtain;cabinet
+336,The weather element occurring is also the constituent of what object in the background?,what_object,umbrella,tree,0.0,0.0,0.0,same,True,True,umbrella;tree;water
+337,Where is this cat located?,where,living room,living room,0.3,0.3,0.0,same,False,False,cat;floor;room
+338,How many colours of floor tiles are there?,how_many,2,2,0.0,0.0,0.0,same,True,True,floor;tile;sofa
+339,What type of terrain is beyond the table and grill?,what_type_kind,dirt,gravel,0.8999999999999999,0.0,-0.8999999999999999,left_better,False,False,park;dirt;leaf
+340,What is the most likely material of the floor?,activity_event,tile,tile,1.0,1.0,0.0,same,False,False,floor;tile;cabinet
+341,What time of day is it likely right now?,other,morning,morning,0.8999999999999999,0.8999999999999999,0.0,same,False,False,window;orange;light
+342,Where is the horse?,where,field,field,1.0,1.0,0.0,same,False,False,horse;mane;face
+343,What kind of shot is the man about to hit?,what_type_kind,serve,serve,0.8999999999999999,0.8999999999999999,0.0,same,False,False,racket;arm;man
+344,What is the animal playing?,other,ball,ball,0.3,0.3,0.0,same,False,False,ball;cloth;bear
+345,What color can be seen in the middle of the upper floor?,color,green,green,1.0,1.0,0.0,same,True,True,wall;letter;person
+346,What are they waiting to do when they stand next to the street?,other,cross street,cross street,0.0,0.0,0.0,same,False,False,street;person;fire truck
+347,What is the black object on the counter in the left corner called?,other,kettle,kettle,1.0,1.0,0.0,same,False,False,tea kettle;vase;chandelier
+348,Where are the sheep located?,where,road,road,1.0,1.0,0.0,same,False,False,sheep;road;car
+349,What is the gray thing on the nearest motorcycle for?,other,cover,cover,0.3,0.3,0.0,same,False,False,tarp;motorcycle;wheel
+350,Which color of clothing is unique to just one of the two people here?,color,black,black,0.0,0.0,0.0,same,False,False,sweater;jean;pant
+351,What type of structure is being used?,what_type_kind,concrete barrier,concrete barrier,0.3,0.3,0.0,same,False,False,skateboard;shoe;man
+352,What is sitting on top of the bed?,other,shoes,shoes,1.0,1.0,0.0,same,False,False,shoe;pillow;table
+353,What is this type of photography called?,other,long exposure,long exposure,0.6,0.6,0.0,same,False,False,light;road;street
+354,What color is the object that the animals have their heads buried in?,color,green,green,1.0,1.0,0.0,same,True,True,grass;ground;head
+355,What is sitting on the bench?,other,statue,statue,0.8999999999999999,0.8999999999999999,0.0,same,False,False,statue;woman;man
+356,What hour is shown on the clock?,other,12:00,10:05,0.0,0.0,0.0,same,False,False,clock;tower;building
+357,What type of drink are they drinking?,what_type_kind,wine,wine,1.0,1.0,0.0,same,False,False,wine;glass;glasses
+358,What energy is used to cook the turkey?,other,electricity,electricity,0.3,0.3,0.0,same,False,False,stove;oven;burner
+359,What type of boat is in the water?,what_type_kind,yacht,yacht,0.8999999999999999,0.8999999999999999,0.0,same,False,False,boat;water;pier
+360,What animals are in the field?,other,cattle,cattle,0.0,0.0,0.0,same,True,True,cow;animal;grass
+361,What video game system are the men playing?,other,wii,wii,1.0,1.0,0.0,same,False,False,man;remote;ceiling fan
+362,What part of the keyboard is shown?,other,keys,keys,0.0,0.0,0.0,same,False,False,key;keyboard;mouse
+363,The playing is using what move?,other,serve,serve,0.0,0.0,0.0,same,False,False,player;racket;arm
+364,Why is the pipe on the back of the truck?,why,transport,transport,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cart;box;head
+365,What is the clear container topped with an orange made out of?,other,glass,glass,1.0,1.0,0.0,same,False,False,glass;cup;slice
+366,What brand of electronics is the person using on the desk?,text_sign_logo,laptop,laptop,0.0,0.0,0.0,same,False,False,laptop;computer;monitor
+367,What countries flag can be seen near the front of the classroom?,other,usa,usa,1.0,1.0,0.0,same,False,False,man;woman;person
+368,What city is this shopping center in?,other,merrywalks,merrywalks,0.3,0.3,0.0,same,False,False,building;sign;man
+369,What is used to pick up the suitcases?,other,handle,handle,1.0,1.0,0.0,same,False,False,handle;suitcase;shelf
+370,What is coming out of her mouth?,other,smoke,smoke,1.0,1.0,0.0,same,False,False,woman;face;hand
+371,What kind of hat is the man wearing?,what_type_kind,cap,cap,0.8999999999999999,0.8999999999999999,0.0,same,False,False,hat;man;bicycle
+372,Where are these students?,where,classroom,classroom,1.0,1.0,0.0,same,False,False,laptop;woman;man
+373,What footwear is the person walking on?,other,shoes,shoes,0.8999999999999999,0.8999999999999999,0.0,same,False,False,shoe;sidewalk;ground
+374,What green fruits or vegetables are in a jar inside the refrigerator?,other,limes,limes,0.3,0.3,0.0,same,False,False,refrigerator;bottle;pot
+375,What kind of clock is this?,what_type_kind,statue clock,statue clock,0.0,0.0,0.0,same,False,False,clock;statue;post
+376,How many rooms/areas in the house are immediately visible in the photo?,how_many,3,3,0.0,0.0,0.0,same,True,True,couch;door;window
+377,Which skier is going fastest?,which,farthest down slope,farthest down slope,0.0,0.0,0.0,same,False,False,skier;man;person
+378,Why is the person's vest yellow?,why,safety,safety,0.0,0.0,0.0,same,False,False,person;man;fire truck
+379,What number is closest to the number of people that are pushing the bus?,text_sign_logo,eight,seven,0.8999999999999999,0.0,-0.8999999999999999,left_better,False,False,person;man;jean
+380,What brand made the shoes the hatless man on the left has on?,text_sign_logo,adidas,adidas,1.0,1.0,0.0,same,False,False,shoe;hat;head
+381,What is the man using?,other,grill,grill,0.3,0.3,0.0,same,False,False,glove;machine;oven
+382,What area of the baseball field are the players almost colliding over as one blocks the other most likely?,activity_event,basepath,basepath,0.0,0.0,0.0,same,False,False,plate;mitt;line
+383,Which ingredient offers the most protein?,which,ham,ham,1.0,1.0,0.0,same,False,False,meat;sandwich;lettuce
+384,What word is on the pillow?,text_sign_logo,none,none,0.0,0.0,0.0,same,False,False,pillow;stand;coffee table
+385,What is the white appliance on the counter used to make?,other,coffee,coffee,1.0,1.0,0.0,same,False,False,coffee maker;stove;microwave
+386,The child holding the controller has what design on their shirt?,other,heart,heart,1.0,1.0,0.0,same,False,False,shirt;jacket;sweater
+387,Why is the black net set up behind the batter?,why,safety,safety,0.8999999999999999,0.8999999999999999,0.0,same,False,False,batter;catcher;umpire
+388,How many animals are staring at the camera?,how_many,4,11,0.0,0.0,0.0,same,True,True,sheep;lamb;herd
+389,How are these balloons floating?,other,in air,in air,0.0,0.0,0.0,same,False,False,balloon;frog;bookshelf
+390,What time of day is this?,other,afternoon,afternoon,0.6,0.6,0.0,same,False,False,man;tie;flower
+391,Why is the man in the green shirt holding his arms out?,why,balance,balance,1.0,1.0,0.0,same,False,False,surfboard;board;person
+392,Where is the most likely location for this bar?,where,pub,pub,0.6,0.6,0.0,same,False,False,table;stand;figurine
+393,When does meter enforcement have their days off?,other,saturday,sunday,0.0,0.0,0.0,same,False,False,parking meter;meter;sign
+394,What color is the pedestrian powered vehicle on the lot?,color,green,green,1.0,1.0,0.0,same,True,True,bike;tire;pedal
+395,What type of lens was used to give this particular photo the distorted look?,what_type_kind,fish eye,fish eye,0.3,0.3,0.0,same,False,False,bicycle;sidewalk;pole
+396,What kind of transportation is shown?,what_type_kind,plane,plane,0.6,0.6,0.0,same,False,False,airplane;cart;tire
+397,What is being used as a bun for the burger?,other,donut,donut,1.0,1.0,0.0,same,False,False,donut;glaze;paper
+398,What type cruciferous vegetable is topping this pie?,what_type_kind,broccoli,broccoli,1.0,1.0,0.0,same,False,False,broccoli;tomato;cheese
+399,How many people seem to be sitting down to eat?,how_many,0,0,0.0,0.0,0.0,same,False,False,fork;knife;napkin
+400,What might the lying dogs likely have to do in a bit?,other,herd,herd,0.6,0.6,0.0,same,False,False,dog;sheep;man
+401,How are the two feeling here?,other,happy,happy,1.0,1.0,0.0,same,False,False,man;woman;girl
+402,The layout of buildings most resembles which period?,which,medieval,medieval,0.3,0.3,0.0,same,False,False,building;house;roof
+403,What does the letter on the racket represent?,text_sign_logo,brand,wilson,0.3,1.0,0.7,right_better,False,False,racket;tennis racket;player
+404,Which shape outer walls do the persons sit in for the best view of the airport?,which,tower,tower,0.0,0.0,0.0,same,False,False,tower;airplane;building
+405,What type of animals are on the grass?,what_type_kind,giraffes,giraffes,1.0,1.0,0.0,same,False,False,giraffe;grass;rock
+406,What is the woman's job called?,other,jumper,jumper,0.0,0.0,0.0,same,False,False,rider;shirt;pad
+407,What type of cusuine is presented?,what_type_kind,spring roll,spring roll,0.0,0.0,0.0,same,False,False,bowl;noodle;meat
+408,What is the purpose of the masonry on the wall to the left of the kitchen?,other,fireplace,fireplace,1.0,1.0,0.0,same,False,False,television;shelf;wall
+409,What type of phones are being used?,what_type_kind,cell phone,cell phone,0.0,0.0,0.0,same,False,False,man;sunglasses;cap
+410,What profession might this man work as?,other,cowboy,cowboy,0.8999999999999999,0.8999999999999999,0.0,same,False,False,man;horse;saddle
+411,Which location here fries snacks on site?,which,none,none,0.0,0.0,0.0,same,False,False,person;woman;sign
+412,What is hanging from the woman's back pocket?,other,nothing,leg,0.6,0.0,-0.6,left_better,True,True,jacket;buckle;leg
+413,What is the item with all of the visible black seeds called?,other,kiwi,kiwi,1.0,1.0,0.0,same,False,False,kiwi;broccoli;pepper
+414,Why is the man standing in the dirt?,why,batting,batting,0.6,0.6,0.0,same,False,False,man;dirt;plate
+415,What is device on the small black box below the laptop on the left?,other,camera,camera,0.0,0.0,0.0,same,False,False,cd;box;frame
+416,What is this room for?,other,sleeping,sleeping,1.0,1.0,0.0,same,False,False,bed;bedroom;dresser
+417,What level or league of baseball are the players most likely playing in?,activity_event,college,minor league,0.6,0.3,-0.3,left_better,False,False,catcher;player;umpire
+418,Which of these emotions is the person least likely to be experiencing?,which,fear,fear,0.0,0.0,0.0,same,False,False,ski;pant;goggles
+419,From which item can you get the most protein?,which,meat,meat,0.8999999999999999,0.8999999999999999,0.0,same,False,False,bacon;meat;cheese
+420,What country is this in?,other,canada,canada,1.0,1.0,0.0,same,False,False,train;tractor;man
+421,What food type likely fills the freezer?,what_object,ice cream,ice cream,1.0,1.0,0.0,same,True,True,box;refrigerator;jug
+422,The white object in the right window is used most often during what season?,other,summer,summer,1.0,1.0,0.0,same,False,False,air conditioner;sofa;couch
+423,This fork has how many prongs?,how_many,4,4,0.0,0.0,0.0,same,True,True,fork;handle;carrot
+424,What is the healthiest ingredient on the pizza?,other,mushroom,mushroom,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cheese;tomato sauce;mushroom
+425,What is the woman wearing?,other,blue dress,blue dress,0.3,0.3,0.0,same,False,False,dress;bracelet;leg
+426,What will the boy do if he hits?,other,run,run,1.0,1.0,0.0,same,False,False,baseball;bat;hand
+427,What is the second shelf in the fridge used for?,activity_event,vegetables,vegetables,0.0,0.0,0.0,same,False,False,vegetable;bottle;container
+428,Where are the trucks headed to?,where,west washington market,west washington market,0.0,0.0,0.0,same,False,False,truck;building;road
+429,What are the zebras swinging?,other,tails,tails,1.0,1.0,0.0,same,False,False,tail;head;leg
+430,Where is this bathroom probably located?,where,hotel,hotel,1.0,1.0,0.0,same,False,False,bathroom;bathtub;door
+431,What color is in the center of the red flower?,color,white,white,1.0,1.0,0.0,same,True,True,heart;ring;watch
+432,What region of the world is this?,other,africa,africa,0.6,0.6,0.0,same,False,False,man;crowd;person
+433,What sports equipment is on the ground?,other,baseballs,gloves,0.0,0.6,0.6,right_better,False,False,glove;hat;cap
+434,The dishes appear to be sitting on what?,other,ground,ground,0.6,0.6,0.0,same,False,False,ground;plate;bowl
+435,Why is the man holding the fork?,why,to eat pizza,to eat pizza,0.3,0.3,0.0,same,False,False,pizza;man;hand
+436,What kind of flavor would the fruit on the pizza add?,what_type_kind,sweet,sweet,1.0,1.0,0.0,same,False,False,pizza;top;meat
+437,Why do these boats are painted in different color?,why,different types,different models,0.0,0.0,0.0,same,False,False,boat;water;fence
+438,What are the zebra's stripes for?,other,camouflage,camouflage,1.0,1.0,0.0,same,False,False,zebra;head;grass
+439,Where are the people standing?,where,beach,beach,1.0,1.0,0.0,same,False,False,man;woman;beach
+440,What color is the background of the large clock?,color,white,white,1.0,1.0,0.0,same,True,True,sky;cloud;roof
+441,Where is this dog located?,where,floor,floor,0.3,0.3,0.0,same,False,False,dog;bed;floor
+442,How are the skiers getting up the hill?,other,ski lift,ski lift,1.0,1.0,0.0,same,False,False,ski lift;building;roof
+443,What is the gray colored residue seen on the outer part of the middle of the board?,other,sand,sand,1.0,1.0,0.0,same,False,False,surfboard;hand;woman
+444,At what time of day are the skateboarders probably skating on the beach?,other,sunset,sunset,1.0,1.0,0.0,same,False,False,sun;sky;beach
+445,Why might people sit here?,why,relax,relax,0.3,0.3,0.0,same,False,False,table;umbrella;water
+446,What is the same color as the most abundant color here?,color,green,green,1.0,1.0,0.0,same,False,False,leaf;banana;petal
+447,What is the light green liquid in the glass and metal dispenser on the table far in the back left?,other,beer,beer,0.0,0.0,0.0,same,False,False,bottle;button
+448,What are the people doing in the water?,activity_event,rowing,rowing,0.8999999999999999,0.8999999999999999,0.0,same,False,False,canoe;boat;water
+449,What are these people ready to do?,other,drink wine,drink wine,1.0,1.0,0.0,same,False,False,man;wine;wine bottle
+450,Which of these objects is used to write on and is present on the desk?,which,pen,pen,0.6,0.6,0.0,same,False,False,pen;cup;book
+451,What is the person being viewed through?,other,window,window,1.0,1.0,0.0,same,False,False,window;woman;person
+452,What is the first word on the trailer?,text_sign_logo,clean,clean,1.0,1.0,0.0,same,False,False,writing;tire;wheel
+453,What kind of bike is being ridden?,what_type_kind,motorcycle,motorcycle,1.0,1.0,0.0,same,False,False,bike;bicycle;motorcycle
+454,Why would someone sit here?,why,eat,to eat,1.0,1.0,0.0,same,False,False,sandwich;table;food
+455,What vehicle might the thing on the wall have come from?,other,wagon,cart,1.0,0.3,-0.7,left_better,False,False,wheel;fireplace;sofa
+456,What can be done with this utensil?,other,stir,stir,1.0,1.0,0.0,same,False,False,spoon;soup;pot
+457,What would this fence help to contain?,other,tennis balls,tennis balls,0.6,0.6,0.0,same,False,False,fence;field;person
+458,What are the people doing on the grass?,activity_event,eating,eating,1.0,1.0,0.0,same,False,False,woman;girl;grass
+459,What alcohol brand has a word that refers to the pattern of this animal?,text_sign_logo,black label,black label,0.0,0.0,0.0,same,False,False,zebra;mane;ear
+460,How many people are visible in the water?,how_many,3,three,0.0,0.3,0.3,right_better,True,True,person;man;surfer
+461,What word can be spelled by rearranging the brand letters on the bottom of the laptop screen?,text_sign_logo,dell,acer,0.0,0.0,0.0,same,False,False,ear;chair;touchpad
+462,Why is the kid wearing a helmet?,why,safety,safety,1.0,1.0,0.0,same,False,False,helmet;head;harness
+463,What is required to be on the ground to do this sport?,other,skiing,skiing,0.0,0.0,0.0,same,False,False,ski;snow;person
+464,What is one tournament that is associated with this sport?,other,us open,us open,0.0,0.0,0.0,same,True,True,girl;ball;racket
+465,Which country uses this kind of mail service?,which,United Kingdom,uk,0.3,0.0,-0.3,left_better,False,False,box;road;building
+466,What is the red bag around the womans waist called?,other,saddlebag,satchel,0.0,0.0,0.0,same,False,False,purse;bag;luggage
+467,What is the girl doing in the bathroom?,activity_event,taking picture,taking picture,0.6,0.6,0.0,same,False,False,camera;woman;person
+468,What is the first visible red word?,text_sign_logo,was,was,1.0,1.0,0.0,same,False,False,sign;display;bike
+469,Why are the children wearing hats?,why,cold,cold,1.0,1.0,0.0,same,False,False,jacket;person;bike
+470,Why are the skiers wearing bibs with numbers on them?,why,competition,competition,0.3,0.3,0.0,same,False,False,skier;man;person
+471,What type of dog is it?,what_type_kind,rottweiler,rottweiler,1.0,1.0,0.0,same,False,False,dog;head;face
+472,The costumed character is likely seated in what locale?,other,city,city,0.6,0.6,0.0,same,False,False,bench;sidewalk;street
+473,What is the last letter on the license plate?,text_sign_logo,j,j,0.3,0.3,0.0,same,False,False,license plate;plate;number
+474,What number is on the player that's fully visible?,text_sign_logo,21,21,0.6,0.6,0.0,same,False,False,number;jersey;shirt
+475,What is the round glass object?,other,lens,camera lens,1.0,0.6,-0.4,left_better,False,False,horse;nose;eye
+476,This dish is suitable for which group of people?,which,vegetarian,vegetarian,0.6,0.6,0.0,same,False,False,broccoli;pasta;noodle
+477,What kind of animal is is the truck?,what_type_kind,elephant,elephant,1.0,1.0,0.0,same,False,False,elephant;man;person
+478,What type of company has an ad at the court?,what_type_kind,continent airlines,continent airlines,0.6,0.6,0.0,same,False,False,court;wall;woman
+479,Where are all of the people in front of the yellow cab going?,where,across street,across street,1.0,1.0,0.0,same,False,False,street;road;coat
+480,What part of the pizza is the person holding?,other,edge,edge,0.0,0.0,0.0,same,False,False,hand;finger;pizza
+481,What is used to keep their balance?,other,ski poles,ski poles,1.0,1.0,0.0,same,False,False,ski pole;pole;glove
+482,What type of outer clothing does the person who last sat here like to wear?,what_type_kind,hat,hat,1.0,1.0,0.0,same,False,False,bench;van;truck
+483,The paper cups probably contain what beverage?,other,soda,soda,1.0,1.0,0.0,same,False,False,cup;pizza;ear
+484,How is the device the boy is holding powered?,other,battery,battery,0.8999999999999999,0.8999999999999999,0.0,same,False,False,wire;cord;remote
+485,What type of shot is the woman about to hit?,what_type_kind,serve,serve,1.0,1.0,0.0,same,False,False,tennis ball;racket;woman
+486,What brand of lemon lime beverage is most likely sold here?,text_sign_logo,coca-cola,coca-cola,0.0,0.0,0.0,same,False,False,cup;straw;sandwich
+487,What are the kids on the boards learning to do?,other,surf,surf,1.0,1.0,0.0,same,False,False,man;boy;board
+488,What are the people on the sidewalk likely to be?,other,passersby,passengers,0.0,0.0,0.0,same,False,False,man;person;car
+489,Why is the woman sitting in the back of the man's bike on the right?,why,riding with man,riding with man,0.0,0.0,0.0,same,False,False,man;cart;cow
+490,What institution often performs the function represented by the word on the main level of the ship nearest the camera?,text_sign_logo,fire department,fire department,0.0,0.0,0.0,same,False,False,writing;boat;water
+491,What are the riders about to do now?,other,jump,jump,0.0,0.0,0.0,same,False,False,motorcycle;bike;person
+492,Where is this person located?,where,living room,living room,1.0,1.0,0.0,same,False,False,couch;jean;rug
+493,What type of cake are the donuts?,what_type_kind,carrot cake,carrot cake,1.0,1.0,0.0,same,False,False,cake;donut;sign
+494,What are the men doing?,activity_event,playing video game,playing video game,0.0,0.0,0.0,same,False,False,man;woman;controller
+495,What is the person riding the horse dressed as?,other,knight,knight,1.0,1.0,0.0,same,False,False,helmet;man;person
+496,This man is likely taking a photo in what type of location?,what_type_kind,restroom,bathroom,0.3,1.0,0.7,right_better,False,False,man;camera;head
+497,Why would one sit here?,why,relax,relax,1.0,1.0,0.0,same,False,False,chair;beach chair;beach
+498,Why is there a bow on the car?,why,wedding,wedding,0.3,0.3,0.0,same,False,False,car;person;plate
+499,What does the large wheel on the left do?,other,spin,spin,0.8999999999999999,0.8999999999999999,0.0,same,False,False,wheel;tower;building
+500,What is the man in the blue shirt attempting to do?,other,cross street,cross street,1.0,1.0,0.0,same,False,False,car;sidewalk;person
+501,Which city is this sign in which contains the Heumarkt transit stop?,text_sign_logo,canton,canton,0.8999999999999999,0.8999999999999999,0.0,same,False,False,sign;building;light
+502,What are the riders on the horses called?,other,jockeys,jockeys,1.0,1.0,0.0,same,False,False,jockey;man;jacket
+503,What item is found on the counter?,what_object,coffee maker,coffee maker,0.3,0.3,0.0,same,True,True,faucet;sink;coffee maker
+504,What does this train transport?,other,passengers,passengers,0.8999999999999999,0.8999999999999999,0.0,same,False,False,train;car;track
+505,What shape are the items that are tied together by the rope?,other,round,round,0.6,0.6,0.0,same,False,False,buoy;ball;person
+506,What is the number on his dress?,text_sign_logo,1369,1369,1.0,1.0,0.0,same,False,False,man;shirt;glasses
+507,What is on her forehead?,other,nothing,nothing,0.0,0.0,0.0,same,False,False,hair;face;eye
+508,What behavior of the people is prohibited indoor?,other,none,none,0.0,0.0,0.0,same,False,False,woman;necklace;shirt
+509,What does the end of the fork point toward?,other,plate,fish,0.0,0.0,0.0,same,False,False,plate;food;broccoli
+510,Where is this room located at?,where,kitchen,kitchen,1.0,1.0,0.0,same,False,False,sink;cabinet;wallpaper
+511,What type of art is this?,what_type_kind,ceramic,ceramic,0.0,0.0,0.0,same,False,False,vase;cup;design
+512,What is this place?,other,market,market,1.0,1.0,0.0,same,False,False,man;carrot;market
+513,What kind of day is it outside?,what_type_kind,sunny,sunny,1.0,1.0,0.0,same,False,False,dog;bandana;nose
+514,How many people can likely eat one cake?,how_many,one,one,1.0,1.0,0.0,same,True,True,cake;decoration;screen
+515,Why are the two holding hands in front of the people?,why,married,married,0.0,0.0,0.0,same,False,False,bride;man;woman
+516,According to the graphic on the sign what kind of place is nearby?,what_type_kind,airport,flughafen,1.0,0.0,-1.0,left_better,False,False,train;person;street
+517,What is the clear plastic on the front for?,other,safety,safety,0.0,0.0,0.0,same,False,False,windshield;motorcycle;bike
+518,What is flying in the sky?,other,jets,jets,1.0,1.0,0.0,same,False,False,jet;airplane;smoke
+519,What type of profession is the man in red in?,what_type_kind,bartender,bartender,1.0,1.0,0.0,same,False,False,bar;wine;ring
+520,Which surface type is the cat sitting upon?,which,wooden,wooden,0.3,0.3,0.0,same,False,False,bench;slat;reflection
+521,How many pizzas do you see?,how_many,2,2,0.0,0.0,0.0,same,True,True,pizza;knife;fork
+522,Why is the cat looking at the screen?,why,curious,curious,0.0,0.0,0.0,same,False,False,cat;television;screen
+523,What does the silver container do to these vegetables?,other,keep warm,keep warm,1.0,1.0,0.0,same,False,False,carrot;broccoli;tomato
+524,Where would you most likely find this advertisement?,where,magazine,magazine,1.0,1.0,0.0,same,False,False,sign;kitchen;wall
+525,What type of racket is next to the mans head?,what_type_kind,tennis,tennis,1.0,1.0,0.0,same,False,False,racket;man;head
+526,What might be done with the purple ball here?,other,exercise,exercise,1.0,1.0,0.0,same,False,False,ball;tire;bag
+527,Which Street Fighter character comes from a country that reveres this animal?,which,rohan,rohan,0.0,0.0,0.0,same,False,False,elephant;man;head
+528,How do these people know each other?,other,siblings,siblings,1.0,1.0,0.0,same,False,False,boy;bear;mouth
+529,How many skaters have both feet on the board?,how_many,1,1,0.0,0.0,0.0,same,True,True,person;man;boy
+530,Which person is telling us their occupation?,which,none,no one,0.0,0.0,0.0,same,False,False,man;woman;person
+531,What is the man's most probable relationship with the boys on the court?,other,coach,coach,1.0,1.0,0.0,same,False,False,man;boy;racket
+532,What is on top of the car?,other,snowboard,surfboard,0.8999999999999999,0.0,-0.8999999999999999,left_better,True,True,snowboard;top;roof
+533,What are the goldish/brown devices called?,other,fire hydrant,fire hydrant,0.0,0.0,0.0,same,False,False,fire hydrant;pole;cap
+534,What is the largest city in the nation where this plane is headquartered?,where,tokyo,tokyo,1.0,1.0,0.0,same,False,False,airplane;building;airport
+535,What is the ground below the blue vehicles made from?,other,brick,brick,1.0,1.0,0.0,same,False,False,tire;sidewalk;sign
+536,Which conveyance shown burns the least gas?,which,bicycle,bike,0.8999999999999999,1.0,0.10000000000000009,right_better,False,False,bicycle;motorcycle;jacket
+537,What does the man in front that is riding the horse have on?,other,hat,hat,0.8999999999999999,0.8999999999999999,0.0,same,False,False,hat;boot;glove
+538,What aboutthese kids makes it likely they go to school together?,other,same clothes,same clothes,0.0,0.0,0.0,same,False,False,skateboard;shirt;park
+539,What is typically on top of a cake?,other,icing,icing,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cake;spoon;foil
+540,Why is the woman holding an umbrella while seated?,why,rain,raining,0.3,1.0,0.7,right_better,False,False,woman;man;umbrella
+541,What is the table the purple flower in the vase is placed on made of?,other,glass,glass,1.0,1.0,0.0,same,False,False,table;vase;chair
+542,This train is powered by what energy?,other,electricity,electricity,1.0,1.0,0.0,same,False,False,train;building;tower
+543,What type of vehicles are in the water?,what_type_kind,boats,boats,0.6,0.6,0.0,same,False,False,boat;sailboat;water
+544,Trains approaching from the direction the photographer take this picture must do what?,other,stop,stop,1.0,1.0,0.0,same,False,False,train;headlight;traffic light
+545,What type of business is this?,what_type_kind,bar,bar,1.0,1.0,0.0,same,False,False,bar;bottle;wine
+546,The man and woman are celebrating their newly formed what?,other,marriage,marriage,1.0,1.0,0.0,same,False,False,bride;groom;couple
+547,What type of mirror has been installed here?,what_type_kind,window,window,0.0,0.0,0.0,same,False,False,window;reflection;reflection
+548,Where is this person playing?,where,yard,yard,0.0,0.0,0.0,same,False,False,girl;grass;bat
+549,What is the horse trying to clear?,other,hurdle,hurdle,0.6,0.6,0.0,same,False,False,pole;hurdle;hoof
+550,Which mode of transport could traverse toward the horizon?,which,boat,boat,1.0,1.0,0.0,same,False,False,boat;car;bicycle
+551,What is the likely relationship of the two females?,other,sisters,sisters,1.0,1.0,0.0,same,False,False,girl;hand;arm
+552,What board game is the man's competition shirt referring to?,other,chess,chess,1.0,1.0,0.0,same,False,False,shirt;man;writing
+553,What is the purpose of the slats on the black surface?,other,drain,drain,0.3,0.3,0.0,same,False,False,sink;countertop;cabinet
+554,What is the blue kite in the lower right corner shaped like?,other,jellyfish,jellyfish,0.0,0.0,0.0,same,False,False,kite;person;grass
+555,What is the most likely reason for reflection on the runway?,activity_event,wet runway,rain,0.0,0.0,0.0,same,False,False,light;runway;wheel
+556,What is the profession of the man standing near the net?,other,tennis player,tennis player,1.0,1.0,0.0,same,False,False,man;racket;hair
+557,What animal is a close relative of zebras?,what_object,giraffe,giraffe,0.0,0.0,0.0,same,True,True,giraffe;gazelle;zebra
+558,What player has an all time record in this sport?,other,baseball player,no answer,0.0,0.0,0.0,same,False,False,batter;catcher;umpire
+559,What kind of zone is this bike parked in?,what_type_kind,pedestrian,pedestrian,1.0,1.0,0.0,same,False,False,sign;sidewalk;bike
+560,What is the horse doing in front of the cart?,activity_event,pulling,pulling,1.0,1.0,0.0,same,False,False,horse;cart;man
+561,What is under the mouse?,other,mousepad,mousepad,1.0,1.0,0.0,same,False,False,mouse pad;table;desk
+562,What symbol is repeated on the sign?,text_sign_logo,no symbol,#,0.0,0.0,0.0,same,False,False,sign;pole;road
+563,When actively playing what physical position will this player be in?,other,crouch,crouch,0.6,0.6,0.0,same,False,False,plate;hand;glove
+564,What are the girls sitting on?,other,dock,dock,1.0,1.0,0.0,same,False,False,boat;water;rock
+565,What actress has the first name that is seen on these jerseys?,other,kimberly,kimberly,0.8999999999999999,0.8999999999999999,0.0,same,False,False,jersey;baseball;head
+566,What kind of cake is in the bottom row?,what_type_kind,red velvet,red velvet,1.0,1.0,0.0,same,False,False,cake;plate;box
+567,What is the woman wearing pink helping the child do?,other,eat,eat,1.0,1.0,0.0,same,False,False,food;boy;sleeve
+568,In what US state is this scene located?,other,new york,new york,0.3,0.3,0.0,same,False,False,bus;traffic light;building
+569,What is the purpose of the item on the fridge handle?,other,towel,towel,0.0,0.0,0.0,same,False,False,refrigerator;handle;stove
+570,Where does this person appear to be dining?,where,airplane,airplane,0.6,0.6,0.0,same,False,False,tray;plate;sandwich
+571,Where is she most likely heading on her bicycle?,where,work,work,0.3,0.3,0.0,same,False,False,bicycle;bike;street
+572,What does the player need to do to the ball?,other,hit,hit,0.8999999999999999,0.8999999999999999,0.0,same,False,False,net;court;grass
+573,The man has a glove where?,where,on his hand,on his hand,0.0,0.0,0.0,same,False,False,hand;arm;leg
+574,What is on top of the man?,other,blanket,blanket,1.0,1.0,0.0,same,True,True,parking meter;bag;bench
+575,Which of these animals heads is closest to the ground?,which,middle,middle,0.0,0.0,0.0,same,False,False,animal;ram;goat
+576,What does that text behind the lady ask?,other,how much do you us?,how much do you us?,0.0,0.0,0.0,same,False,False,sign;pastry;cake
+577,The animals are walking towards the same object to do what?,other,graze,graze,0.0,0.0,0.0,same,False,False,water;rock;hill
+578,Which animal is the weakest?,which,zebra,zebra,1.0,1.0,0.0,same,False,False,buffalo;bird;zebra
+579,What dessert are the people eating?,other,donuts,donuts,1.0,1.0,0.0,same,False,False,donut;girl;man
+580,What is the tallest thing in this area?,other,building,building,1.0,1.0,0.0,same,False,False,building;pole;sky
+581,What are the stuffed animals pretending to do?,other,read,read,1.0,1.0,0.0,same,False,False,dog;animal;head
+582,How many glasses of beer are at least partially visible?,how_many,6,8,0.0,0.0,0.0,same,True,True,glass;beer;drink
+583,What object is missing that has a yellow cable on the shelf of the cabinet on the wall?,what_object,phone,laptop,0.3,0.0,-0.3,left_better,True,True,cabinet;table;chair
+584,What type of animal is in the grass?,what_type_kind,cattle,cattle,0.0,0.0,0.0,same,False,False,cow;grass;trailer
+585,What is the laptop on?,other,table,table,1.0,1.0,0.0,same,False,False,table;chair;cushion
+586,What type of vehicles are coming down the road?,what_type_kind,buses,bus,0.6,1.0,0.4,right_better,False,False,bus;car;van
+587,Why is the woman holding the umbrella?,why,shade,shade,1.0,1.0,0.0,same,False,False,umbrella;woman;hand
+588,The reddish-brown food in the further bowl is what type of food?,what_type_kind,meat,meat,1.0,1.0,0.0,same,False,False,food;sauce;orange
+589,What is the blue and white item?,other,cooler,cooler,1.0,1.0,0.0,same,False,False,cooler;blender;table
+590,What is the woman holding?,other,spatula,spatula,1.0,1.0,0.0,same,False,False,spatula;hand;pot
+591,What is hiding the bridge?,other,mist,clouds,0.0,0.6,0.6,right_better,False,False,cloud;horizon;land
+592,Who is winning the game?,other,Michael Russell,Michael Russell,0.3,0.3,0.0,same,False,False,man;ball;arm
+593,What is reflected in the ball?,other,person,person,1.0,1.0,0.0,same,False,False,woman;person;room
+594,Who is the man in white?,other,groom,groom,1.0,1.0,0.0,same,False,False,man;shirt;smile
+595,What is this game played with?,other,bat,bat,0.0,0.0,0.0,same,False,False,bat;glove;catcher
+596,What type of water are the geese floating in?,what_type_kind,lake,lake,0.6,0.6,0.0,same,False,False,water;goose;shore
+597,What is the most likely explanation for how the people in the back of the room can hear this man?,activity_event,speakers,speaking,0.3,0.0,-0.3,left_better,False,False,mouth;man;suit
+598,What type of board is being used?,what_type_kind,cutting board,cutting board,0.8999999999999999,0.8999999999999999,0.0,same,False,False,board;ham;bowl
+599,What is being done with the bangles or necklaces?,other,sold,sold,0.6,0.6,0.0,same,False,False,woman;bracelet;sign
+600,What colour is the lead player's shirt?,other,white,white,1.0,1.0,0.0,same,False,False,shirt;jersey;man
+601,What season is it on the grassland where the elephants are grazing?,where,summer,summer,1.0,1.0,0.0,same,False,False,grass;field;bush
+602,Which type animals do at least one person here like?,which,dog,dog,1.0,1.0,0.0,same,False,False,dog;woman;picture
+603,What is the color of the tie?,color,blue,blue,0.6,0.6,0.0,same,False,False,tie;man;shirt
+604,What destination is on the top of the bus?,other,north bergen,north bergen,1.0,1.0,0.0,same,False,False,sign;number;flag
+605,What group of people are on the bus?,other,seniors,none,0.6,0.0,-0.6,left_better,False,False,woman;man;window
+606,Why are the people lining up?,why,to board plane,to board plane,1.0,1.0,0.0,same,False,False,airplane;man;person
+607,What material are the woman's glasses frames?,other,plastic,plastic,1.0,1.0,0.0,same,False,False,glasses;woman;eye
+608,What type of body of water are all of the birds gathering at?,what_type_kind,ocean,ocean,1.0,1.0,0.0,same,False,False,water;wave;beach
+609,Where is this man likely from?,where,tropical region,tropical region,0.0,0.0,0.0,same,False,False,man;face;tree
+610,The screen type is generally used for what?,activity_event,entertainment,entertainment,0.6,0.6,0.0,same,False,False,television;screen;logo
+611,What time is it in their kitchen?,other,9:05,8:05,0.0,0.0,0.0,same,False,False,clock;oven;sink
+612,What is the likely ethnicity of the man?,other,asian,asian,1.0,1.0,0.0,same,False,False,man;hair;bridge
+613,What is the woman wearing pink helping the boy do?,other,eat,eat,1.0,1.0,0.0,same,False,False,food;boy;sleeve
+614,What is the woman holding to her ear?,other,cell phone,phone,0.3,1.0,0.7,right_better,False,False,phone;cell phone;jacket
+615,What animal corresponds to the sound written on the dog's blanket?,what_object,dog,dog,0.0,0.0,0.0,same,True,True,dog;blanket;paw
+616,What profession is the man on the motorcycle?,other,police officer,police officer,1.0,1.0,0.0,same,False,False,jacket;glove;license plate
+617,What is causing white bubbles on the water toward the shore?,other,waves,waves,0.8999999999999999,0.8999999999999999,0.0,same,False,False,wave;water;beach
+618,What is the room adjacent to the kitchen?,other,closet,closet,1.0,1.0,0.0,same,False,False,closet;shoe;drawer
+619,What creamy food frequently would fill up these cups?,other,avocado,avocado,0.0,0.0,0.0,same,False,False,avocado;strawberry;fruit
+620,What sport do the people have equipment for?,other,snowboarding,snowboarding,1.0,1.0,0.0,same,False,False,snowboard;ski;mountain
+621,How many transportation have on headlights?,how_many,0,1,0.0,0.0,0.0,same,True,True,train;bus;bridge
+622,What is the large white object on the elephant called?,other,tusk,tusk,1.0,1.0,0.0,same,False,False,tusk;trunk;ear
+623,In what part of the world is this city traffic most likely occurring?,activity_event,asia,asia,1.0,1.0,0.0,same,False,False,car;truck;road
+624,What type of task is being done?,what_type_kind,washing,wash,0.0,0.3,0.3,right_better,False,False,motorcycle;woman;man
+625,What animal is near the water?,what_object,bird,bird,0.0,0.0,0.0,same,True,True,swan;man;woman
+626,What is the bus being used for?,activity_event,transportation,transportation,0.0,0.0,0.0,same,False,False,bus;woman;car
+627,The line the horse is walking on separates what?,other,cars,cars,0.6,0.6,0.0,same,False,False,car;road;street
+628,How many suitcases have tags?,how_many,3,3,0.0,0.0,0.0,same,True,True,tag;suitcase;bag
+629,The blue tape on the wall is in the shape of a letter that is needed to spell what word?,text_sign_logo,x,x,0.3,0.3,0.0,same,False,False,screen;wall;spoon
+630,Where is the photographer standing?,where,in bathroom,bathroom,0.0,1.0,1.0,right_better,False,False,door;mirror;man
+631,What type of birds can be seen in the water?,what_type_kind,geese,geese,0.8999999999999999,0.8999999999999999,0.0,same,False,False,bird;duck;bank
+632,What relation is the woman to the child?,other,mother,mother,1.0,1.0,0.0,same,False,False,baby;woman;neck
+633,What is the mug below the computer monitor being used for?,activity_event,holding pencils,holding pencils,0.6,0.6,0.0,same,False,False,mug;cup;pencil
+634,What are the umbrellas placed in the sand to block?,other,sun,sun,1.0,1.0,0.0,same,False,False,man;girl;person
+635,What is the top word on the book that the woman is holding?,text_sign_logo,fun,fun,1.0,1.0,0.0,same,False,False,woman;hand;arm
+636,What position is the man in the purple shirt riding the vehicle in?,other,standing,standing,1.0,1.0,0.0,same,False,False,seat;hat;short
+637,Where is the pie most likely shown?,where,pizzeria,restaurant,0.6,1.0,0.4,right_better,False,False,pizza;table;countertop
+638,What are these people most likely drinking?,activity_event,water,water,1.0,1.0,0.0,same,False,False,glass;woman;man
+639,Why is the woman wearing goggles?,why,safety,safety,0.0,0.0,0.0,same,False,False,goggles;head;snow
+640,What type of display is hanging on the pole?,what_type_kind,flag,flag,0.8999999999999999,0.8999999999999999,0.0,same,False,False,flag;sign;store
+641,Where did the idea of ketchup originally come from?,where,not possible,not possible,0.0,0.0,0.0,same,False,False,woman;boy;cup
+642,Which Disney mascot is pictured next to the Christmas Tree?,which,duck,duck,0.0,0.0,0.0,same,False,False,tree;teddy bear;hat
+643,What is the bear doin?,other,sitting,sitting,1.0,1.0,0.0,same,False,False,bear;chair;door
+644,How many green plants are on the right side of the room?,how_many,2,2,0.0,0.0,0.0,same,True,True,plant;pot;curtain
+645,Who is the most experienced rider in the photo?,other,man,man,1.0,1.0,0.0,same,False,False,man;boy;horse
+646,How was this food cooked?,other,grilled,grilled,1.0,1.0,0.0,same,False,False,sandwich;bread;meat
+647,How long does the average giraffe live?,other,25 years,25 years,0.8999999999999999,0.8999999999999999,0.0,same,False,False,giraffe;bird;field
+648,What pattern is the floor?,other,checkered,checkered,0.8999999999999999,0.8999999999999999,0.0,same,False,False,floor;tile;bottle
+649,What time period of the day is it?,other,afternoon,afternoon,1.0,1.0,0.0,same,False,False,clock;sky;road
+650,What are the non iced baked items shown boiled in?,other,donuts,donut,0.0,0.0,0.0,same,False,False,bread;donut;basket
+651,Why is the phone wrapped in a pink enclosure?,why,for protection,for protection,0.0,0.0,0.0,same,False,False,hand;bread;shirt
+652,What are the dogs getting?,other,nothing,nothing,0.0,0.0,0.0,same,False,False,dog;shadow;head
+653,What is this woman doing that only 10% of people do?,activity_event,eating,eating,0.0,0.0,0.0,same,False,False,woman;tray;food
+654,What are the two people doing?,activity_event,skiing,skiing,1.0,1.0,0.0,same,False,False,ski;girl;bib
+655,What type of instrument is found next to the attachable keyboard?,what_type_kind,mouse,mouse,1.0,1.0,0.0,same,False,False,mouse;laptop;touchpad
+656,What is the bus parked next to?,other,fence,fence,0.0,0.0,0.0,same,False,False,fence;sidewalk;car
+657,What activity occurs in this room as result of the objects on the furniture to the left of the partition?,activity_event,watch tv,watch tv,0.0,0.0,0.0,same,False,False,television;shelf;stand
+658,What type of car is behind the motorcycle?,what_type_kind,jeep,jeep,1.0,1.0,0.0,same,False,False,jeep;tire;wheel
+659,What is the vehicle traveling on?,other,tracks,tracks,1.0,1.0,0.0,same,False,False,track;rail;sidewalk
+660,What is the name given to this type of game?,other,baseball,baseball,1.0,1.0,0.0,same,False,False,catcher;ball;person
+661,What is the frequent vehicle on this pictured street?,other,motorbike,motorbike,0.0,0.0,0.0,same,False,False,motorcycle;van;car
+662,What is in the bottle with the wooden top?,other,liquid,mustard,0.0,0.0,0.0,same,True,True,bottle;food;strawberry
+663,What position in baseball is the player diving for a catch?,other,shortstop,shortstop,0.3,0.3,0.0,same,False,False,man;helmet;glove
+664,What is the reflective surface behind the woman holding the umbrella?,other,glass,glass,1.0,1.0,0.0,same,False,False,window;building;palm tree
+665,What work is the team of horses doing?,activity_event,plowing,plow,0.8999999999999999,0.0,-0.8999999999999999,left_better,False,False,man;person;dog
+666,This street is located in what country?,other,united states,united states,1.0,1.0,0.0,same,False,False,bus;car;road
+667,What is in the middle of this breakfast food?,other,donut,donut,0.0,0.0,0.0,same,True,True,donut;chocolate;frosting
+668,What type of transportation is this?,what_type_kind,train,train,1.0,1.0,0.0,same,False,False,train;engine;track
+669,What color is the sign that is furthest to the right?,color,red,red,1.0,1.0,0.0,same,False,False,sign;pineapple;watermelon
+670,What might this be topped with traditionally?,other,cheese,cheese,0.3,0.3,0.0,same,False,False,cookie;cheese;plate
+671,What religion is indicated by the garments of the two men in white clothes and caps?,other,islam,islam,0.8999999999999999,0.8999999999999999,0.0,same,False,False,man;motorcycle;license plate
+672,What video game system are the boys playing on?,other,wii,wii,1.0,1.0,0.0,same,False,False,boy;girl;remote
+673,Where are the people sitting?,where,bench,bench,1.0,1.0,0.0,same,False,False,bench;man;person
+674,Which continent are these planes from?,which,europe,europe,1.0,1.0,0.0,same,False,False,airplane;airport;runway
+675,What is the last word on the sign?,text_sign_logo,green,green,1.0,1.0,0.0,same,False,False,sign;bicycle;person
+676,How did the paper get holes in it?,other,not possible,not possible,0.0,0.0,0.0,same,False,False,man;tie;face
+677,What is this cooking process called?,other,sauté,saute,0.0,0.3,0.3,right_better,False,False,broccoli;meat;carrot
+678,What has the man stuck his ice pick into?,other,snow,snow,1.0,1.0,0.0,same,False,False,snow;hill;ground
+679,Which thing is closest to the photographer?,which,people,people,0.3,0.3,0.0,same,False,False,hair;person;glasses
+680,What is the black pole the two are trying to hit off of called?,other,home plate,home plate,0.0,0.0,0.0,same,False,False,stand;bat;bleacher
+681,Whose trucks are they?,other,airport,airport,1.0,1.0,0.0,same,False,False,airport;runway;truck
+682,What type of lighting is used in the recessed lights in the kitchen?,what_type_kind,ceiling light,light,0.0,0.0,0.0,same,False,False,ceiling;light;stove
+683,What is coming through the structure at the top of the wall above the tub?,other,light,light,0.6,0.6,0.0,same,False,False,window;light;bathtub
+684,Which person is most everyone shown here staring at now?,which,batter,batter,1.0,1.0,0.0,same,False,False,catcher;umpire;bat
+685,What season is it?,other,spring,spring,0.6,0.6,0.0,same,False,False,motorcycle;grass;headlight
+686,What kind of beverage is the red sign advertising?,what_type_kind,coca-cola,coca-cola,0.0,0.0,0.0,same,False,False,sign;boy;bicycle
+687,How old is the person that the cake is for?,other,30,30,1.0,1.0,0.0,same,False,False,banner;cake;frosting
+688,What type of restaurant is this?,what_type_kind,pizza,pizza,0.6,0.6,0.0,same,False,False,pizza;man;woman
+689,What is the pattern of the hair?,other,striped,striped,1.0,1.0,0.0,same,False,False,mane;ear;tail
+690,What is happening on the table?,other,cat sleeping,cat sleeping,0.6,0.6,0.0,same,False,False,cat;pen;paper
+691,What are the giant cribs likely used for?,activity_event,parade,parade,0.3,0.3,0.0,same,False,False,bed;person;clothes
+692,What company made the box that is near the far wall?,other,unanswerable,unanswerable,0.0,0.0,0.0,same,False,False,box;wall;hand
+693,How tall is the average newborn giraffe?,other,3 feet,10 feet,0.0,0.0,0.0,same,False,False,giraffe;head;eye
+694,What other animal does this animal often work closely with?,other,human,human,0.8999999999999999,0.8999999999999999,0.0,same,False,False,person;leaf;paw
+695,What kind of liquid is in the blue bottle?,what_type_kind,gin,gin,0.0,0.0,0.0,same,False,False,bottle;plate;bowl
+696,What month is written on the chest of the stuffed animal?,text_sign_logo,june,june,1.0,1.0,0.0,same,False,False,bear;logo;animal
+697,Why are the stuffed bears on display?,why,for sale,for sale,0.3,0.3,0.0,same,False,False,bear;teddy bear;paper
+698,What is the train riding on?,other,tracks,tracks,0.8999999999999999,0.8999999999999999,0.0,same,False,False,track;ground;pole
+699,What is prohibited when driving on the street?,other,20 zone,20 zone,0.0,0.0,0.0,same,False,False,sidewalk;sign;line
+700,What does the color of the stoplight mean?,color,go,go,1.0,1.0,0.0,same,False,False,traffic light;light;street light
+701,What type of parking is available?,what_type_kind,none,no parking,0.0,0.0,0.0,same,False,False,crosswalk;traffic light;road
+702,What is the highest item that is located on the refrigerator?,other,microwave,microwave,0.6,0.6,0.0,same,False,False,microwave;bottle;sign
+703,What trick is the man performing?,other,grind,grind,0.6,0.6,0.0,same,False,False,man;hand;arm
+704,What kind of fish inspired the kite design?,what_type_kind,clownfish,clownfish,0.8999999999999999,0.8999999999999999,0.0,same,False,False,fish;kite;person
+705,Which part of the animals is/are precious?,which,tusks,tusks,1.0,1.0,0.0,same,False,False,tusk;trunk;head
+706,What is the stuffed bear wearing?,other,bow tie,bow tie,1.0,1.0,0.0,same,False,False,bow tie;bow;body
+707,What type of picture is on the screen?,what_type_kind,tv,tv,0.0,0.0,0.0,same,False,False,face;man;screen
+708,What is the shop at the back?,other,motorcycle shop,motorcycle shop,0.6,0.6,0.0,same,False,False,motorcycle;bike;garage
+709,What movie is on the kite?,other,toy story,toy story,1.0,1.0,0.0,same,False,False,girl;boy;child
+710,Which ingredient on the pizza is uncooked?,which,tomato,tomato,1.0,1.0,0.0,same,False,False,tomato;pizza;straw
+711,What is the light source in the room?,other,laptop,laptop,1.0,1.0,0.0,same,False,False,laptop;screen;window
+712,Why is there wire and posts near the elephants?,why,fence,fence,0.0,0.0,0.0,same,False,False,fence;wire;pole
+713,What food is the white powder sprinkled over the dessert?,what_object,dessert,sugar,0.0,0.6,0.6,right_better,True,True,dessert;plate;strawberry
+714,What does the man have in his hand?,other,cigarette,cigarette,0.6,0.6,0.0,same,False,False,ring;briefcase;bag
+715,What type of fencing is used?,what_type_kind,wire,wire,1.0,1.0,0.0,same,False,False,fence;sheep;rock
+716,What kind of meal do they appear to be enjoying?,what_type_kind,breakfast,breakfast,1.0,1.0,0.0,same,False,False,person;plate;hat
+717,What object shown seems most unusual?,what_object,pole,pole,0.3,0.3,0.0,same,True,True,pole;scaffolding;road
+718,What are the objects made of?,other,glass,glass,1.0,1.0,0.0,same,False,False,vase;glass;bouquet
+719,What category does the food fall into that the girls are eating?,other,sweet,sweet,0.0,0.0,0.0,same,False,False,donut;woman;nose
+720,What is the first number on the license plate?,text_sign_logo,0,0,0.0,0.0,0.0,same,False,False,license plate;headlight;wiper
+721,What common functional element is missing from the boats on the scaffolding?,other,sail,sails,1.0,1.0,0.0,same,False,False,mast;sand;person
+722,The room with the refrigerator in it appears to be a room of what type?,what_type_kind,living room,kitchen,0.0,1.0,1.0,right_better,False,False,kitchen;clothes;clothing
+723,What kind of room is this?,what_type_kind,hotel room,hotel room,1.0,1.0,0.0,same,False,False,room;table;lamp
+724,What type of television is in the corner of the living room?,what_type_kind,crt,crt,0.6,0.6,0.0,same,False,False,television;fireplace;mirror
+725,What are the two people doing?,activity_event,making pizza,making pizza,0.8999999999999999,0.8999999999999999,0.0,same,False,False,pizza;woman;girl
+726,What is the cat looking at on the laptop screen?,other,aurora,aurora,0.0,0.0,0.0,same,False,False,screen;monitor;computer
+727,What color T-shirt he wears?,color,white,white,1.0,1.0,0.0,same,True,True,shirt;man;person
+728,What did the child use to develop a fake game controller?,other,legos,legos,1.0,1.0,0.0,same,False,False,remote;button;finger
+729,What are the 3 Bears doing?,activity_event,picnic,picnic,1.0,1.0,0.0,same,False,False,bear;teddy bear;basket
+730,What body of water is this?,other,lake,lake,1.0,1.0,0.0,same,False,False,water;boat;house
+731,What type of cow is the brown one?,what_type_kind,brown cow,brown cow,0.3,0.3,0.0,same,False,False,cow;herd;animal
+732,What has caused the leaves to fall from the trees?,other,season,season,0.0,0.0,0.0,same,False,False,tree;woman;grass
+733,The front of the dog is closest to what number on the scale?,text_sign_logo,18,16,0.0,0.8999999999999999,0.8999999999999999,right_better,False,False,frisbee;head;pool
+734,How will the people on the mountain get off it?,other,ski down,ski down,1.0,1.0,0.0,same,False,False,ski;ski pole;ground
+735,What does this bird named as?,other,duck,duck,0.8999999999999999,0.8999999999999999,0.0,same,False,False,bird;duck;seaweed
+736,What type of drink is to the left of the books?,what_type_kind,beer,beer,1.0,1.0,0.0,same,False,False,bottle;magazine;pile
+737,What type of business does the woman's hat promote?,what_type_kind,lumber,lumber,0.0,0.0,0.0,same,False,False,hat;cap;woman
+738,What type of climate is it?,what_type_kind,coastal,warm,0.3,0.3,0.0,same,False,False,sky;cloud;beach
+739,What pattern is on the man's shirt?,other,plaid,plaid,1.0,1.0,0.0,same,False,False,sweater;pant;shoe
+740,Why is his mouth open?,why,eating,eating,1.0,1.0,0.0,same,False,False,man;mouth;phone
+741,What is the man with no shirt doing?,activity_event,washing,washing,0.0,0.0,0.0,same,False,False,man;water;face
+742,What is on the left side of the painting that is on the counter?,other,plant,plant,1.0,1.0,0.0,same,True,True,plant;flower;sink
+743,What is the woman wearing on her head?,other,headphones,headphones,1.0,1.0,0.0,same,False,False,headphone;phone;cord
+744,What type of food is for sale here?,what_type_kind,cakes,cakes,1.0,1.0,0.0,same,False,False,cake;food;man
+745,What is the fence meant to block?,other,cars,cars,0.0,0.0,0.0,same,False,False,car;house;road
+746,What are the traditional long printed skirts worn by the women called?,other,sari,sari,0.3,0.3,0.0,same,False,False,woman;table;food
+747,What fuel is this type of bus?,other,diesel,diesel,0.6,0.6,0.0,same,False,False,bus;road;street
+748,What game is being played on the table?,other,checkers,checkers,1.0,1.0,0.0,same,False,False,coffee table;table;couch
+749,What is the same color as the fork?,color,blue,blue,0.0,0.0,0.0,same,False,False,fork;arrow;handle
+750,Why is the man on the left wearing the goggles?,why,to protect eyes,to protect eyes,0.0,0.0,0.0,same,False,False,goggles;man;glove
+751,What gear is missing on the child?,other,helmet,helmet,1.0,1.0,0.0,same,False,False,skateboard;shoe;hood
+752,Why is the cat looking inside the fridge?,why,hungry,hungry,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cat;refrigerator;jar
+753,What country is this in?,other,india,india,1.0,1.0,0.0,same,False,False,building;back;license plate
+754,How can we tell a building is under construction in this area?,other,crane,crane,1.0,1.0,0.0,same,False,False,crane;building;city
+755,The weather must have a moderate amount of what?,other,wind,wind,0.8999999999999999,0.8999999999999999,0.0,same,False,False,sky;ocean;water
+756,Some of the children are wearing head coverings likely for what reason?,other,costume,christmas,0.3,0.3,0.0,same,False,False,hat;head;girl
+757,What famous person is likely on the bottle of dressing that is closest to and facing the camera?,other,none,none,0.0,0.0,0.0,same,False,False,bottle;label;hand
+758,What are the last two numbers on the man's shirt?,other,30,30,1.0,1.0,0.0,same,False,False,shirt;man;hat
+759,What is the skateboard being cut into most likely constructed from?,activity_event,chocolate,chocolate,0.0,0.0,0.0,same,False,False,cake;chocolate;boy
+760,What is the quotient of each individual digit on his jersey?,other,1,11,0.0,0.0,0.0,same,False,False,player;number;home plate
+761,What is the white object the man in the black shirt is holding?,other,plate,plate,1.0,1.0,0.0,same,False,False,plate;french fries;sauce
+762,What type of food is being served?,what_type_kind,banana,banana,1.0,1.0,0.0,same,False,False,banana;man;face
+763,Why does the person in orange have their arms out?,why,to catch frisbee,catching frisbee,0.6,0.3,-0.3,left_better,False,False,frisbee;arm;boy
+764,What is the white ingredient on the sandwich?,other,onion,onion,1.0,1.0,0.0,same,False,False,onion;carrot;topping
+765,What has caused the elephants to turn brown?,other,dirt,dirt,0.8999999999999999,0.8999999999999999,0.0,same,False,False,elephant;dirt;ground
+766,What meal is this?,other,lunch,lunch,0.0,0.0,0.0,same,False,False,rice;plate;food
+767,What is the boy reaching up to grab?,other,apples,apples,0.6,0.6,0.0,same,False,False,box;apple;bin
+768,What type of car can be seen behind the motorcycle?,what_type_kind,car,car,0.0,0.0,0.0,same,False,False,car;windshield;seat
+769,What does the sign on the stop light say to not block?,text_sign_logo,stop light,stop light,0.0,0.0,0.0,same,False,False,sign;light;road
+770,What is blocking the view of the buildings?,other,trees,trees,1.0,1.0,0.0,same,False,False,tree;park;grass
+771,What will the ump yell if the player makes contact with the ball?,other,ball,ball,0.0,0.0,0.0,same,False,False,umpire;catcher;player
+772,In which position are the people?,which,crouching,crouching,0.3,0.3,0.0,same,False,False,boy;man;skateboard
+773,What is the white building with a green roof?,other,hotel,hotel,1.0,1.0,0.0,same,False,False,building;woman;man
+774,What colour are the couch and chair?,other,white,white,0.6,0.6,0.0,same,False,False,chair;couch;window
+775,What country is this in?,other,britain,britain,0.0,0.0,0.0,same,False,False,man;carriage;sign
+776,What type of game were they probably playing in the park?,what_type_kind,frisbee,frisbee,1.0,1.0,0.0,same,False,False,frisbee;man;jean
+777,In what way were the carrots cooked?,other,roasted,roasted,0.6,0.6,0.0,same,False,False,carrot;vegetable;food
+778,The animal has what kind of a tail?,what_type_kind,white,white,0.0,0.0,0.0,same,False,False,cat;tail;hose
+779,What is the vase made of?,other,ceramic,ceramic,0.8999999999999999,0.8999999999999999,0.0,same,False,False,vase;design;base
+780,What type of pizza is shown?,what_type_kind,margherita,margherita,0.3,0.3,0.0,same,False,False,pizza;woman;cheese
+781,What is the person using to eat the pizza?,other,fork,fork,1.0,1.0,0.0,same,False,False,plate;knife;fork
+782,The kind of lunch they are sitting down to is most likely what type?,what_type_kind,business,business,0.6,0.6,0.0,same,False,False,plate;man;woman
+783,Which vehicle holds the most people?,which,train,train,1.0,1.0,0.0,same,False,False,train;car;woman
+784,What type of location is shown?,what_type_kind,living room,living room,1.0,1.0,0.0,same,False,False,room;coffee table;table
+785,The airliner is in what position?,other,parked,parked,0.8999999999999999,0.8999999999999999,0.0,same,False,False,airplane;ground;tarmac
+786,What will someone stay away from consuming if they will be driving later?,other,beer,beer,1.0,1.0,0.0,same,False,False,beer;sandwich;sauce
+787,What fruit is represented here?,other,grape,grape,1.0,1.0,0.0,same,False,False,wine;hand;person
+788,What country is the plane in the back from?,other,egypt,egypt,1.0,1.0,0.0,same,False,False,flag;person;man
+789,What is on the side of the bus?,other,posters,posters,0.0,0.0,0.0,same,True,True,door;window;woman
+790,What is the man in the blue jacket trying to climb?,other,mountain,mountain,1.0,1.0,0.0,same,False,False,ski;snow;mountain
+791,The clothing in this picture all includes what similarity?,other,formal,formal,0.0,0.0,0.0,same,False,False,hat;necklace;tie
+792,What kind is the 2 vehicles?,what_type_kind,car,car,0.0,0.0,0.0,same,False,False,car;truck;license plate
+793,What is the object the man is on made from?,other,wood,wood,1.0,1.0,0.0,same,False,False,ramp;skateboard;ground
+794,How many markers are on the tray behind the man?,how_many,0,2,0.0,0.0,0.0,same,True,True,marker;outlet;cord
+795,What room is pictured here for a rest?,other,restroom,bathroom,1.0,0.8999999999999999,-0.10000000000000009,left_better,False,False,sink;faucet;sign
+796,What is this food most likely made out of?,activity_event,plastic,plastic,1.0,1.0,0.0,same,False,False,hot dog;plate;hand
+797,Where are the white animals walking?,where,street,street,1.0,1.0,0.0,same,False,False,cow;animal;car
+798,What is the boy riding?,other,skateboard,skateboard,1.0,1.0,0.0,same,False,False,skateboard;jean;board
+799,What is the closest animal's neck most directly useful for?,other,eating,eating,0.6,0.6,0.0,same,False,False,giraffe;grass;deer
+800,What is the zebra in the center doing?,activity_event,running,running,1.0,1.0,0.0,same,False,False,zebra;head;nose
+801,What might the two be feeling while sitting on the bench?,other,love,love,1.0,1.0,0.0,same,False,False,man;woman;couple
+802,Why is the clothing on the rack?,why,for sale,for sale,1.0,1.0,0.0,same,False,False,man;jacket;board
+803,What are the two silver objects on the left wall used for?,activity_event,dry hands,dry hands,0.0,0.0,0.0,same,False,False,dispenser;faucet;sink
+804,Which of these animals is using the computer directly?,which,human,human,1.0,1.0,0.0,same,False,False,dog;person;hand
+805,What is likely the mascot of the team whose website address appears in the background?,other,bear,bear,1.0,1.0,0.0,same,False,False,player;man;dirt
+806,What is the device on the right filled with paper used for?,activity_event,print,print,0.0,0.0,0.0,same,False,False,printer;container;tray
+807,There are ho many differently colored bird on the table?,other,2,2,0.0,0.0,0.0,same,False,False,bird;tray;peel
+808,What is the cat rubbing against?,other,laptop,laptop,1.0,1.0,0.0,same,False,False,laptop;screen;table
+809,What are the vehicles about to do?,other,stop,stop,1.0,1.0,0.0,same,False,False,light;person;street
+810,What shape are the support beams that hold up the building?,other,rectangular,rectangular,0.0,0.0,0.0,same,False,False,pole;post;sidewalk
+811,Where is the person bending?,where,counter,counter,0.3,0.3,0.0,same,False,False,woman;sweater;tights
+812,This social demographic or social movement is represented by this gathering?,other,lgbtq,lgbtq,1.0,1.0,0.0,same,False,False,crowd;woman;bandana
+813,What activity has just ended?,activity_event,tennis,tennis,1.0,1.0,0.0,same,False,False,court;racket;girl
+814,What is a specific type of the animal in the picture?,other,fish,fish,1.0,1.0,0.0,same,False,False,car;monitor;speaker
+815,What is this dog ready to do?,other,eat,eat,1.0,1.0,0.0,same,False,False,mouth;face;head
+816,What continent is this?,other,europe,europe,0.8999999999999999,0.8999999999999999,0.0,same,False,False,train;station;train station
+817,Why are the lights red with no traffic?,why,no traffic,no traffic,0.0,0.0,0.0,same,False,False,traffic light;light;sky
+818,How is the young red haired girl feeling?,other,happy,happy,1.0,1.0,0.0,same,False,False,girl;child;hair
+819,What type of appliance is open here?,what_type_kind,refrigerator,refrigerator,1.0,1.0,0.0,same,False,False,refrigerator;door;picture
+820,From all food items present what is the color of food that presents the most moisture?,color,green,green,1.0,1.0,0.0,same,False,False,carrot;broccoli;orange
+821,What animals are in the grass behind the woman in yellow?,other,sheep,cats,0.0,1.0,1.0,right_better,True,True,animal;girl;woman
+822,How is the object in the air controlled?,other,string,string,0.6,0.6,0.0,same,False,False,kite;person;man
+823,Is this a real live scene?,other,no,no,1.0,1.0,0.0,same,False,False,truck;car;man
+824,What is the animal engaging in?,other,sniffing,sniffing,0.0,0.0,0.0,same,False,False,puppy;toilet;paw
+825,In what position is the highest bird?,other,flying,flying,0.6,0.6,0.0,same,False,False,bird;head;ledge
+826,What vehicle is the man riding?,other,tractor,tractor,1.0,1.0,0.0,same,False,False,man;wheel;sweater
+827,If air is exchanged in this room at which location is a fan most likely to be found and installed?,activity_event,ceiling,ceiling,1.0,1.0,0.0,same,False,False,bathroom;ceiling;window
+828,What might you build with the stuff on the ground?,other,snowman,snowman,1.0,1.0,0.0,same,False,False,ski;boot;ski pole
+829,How many signs have a diagonal line through them?,how_many,2,2,0.0,0.0,0.0,same,True,True,sign;circle;license plate
+830,What flag is on the umbrella?,other,union jack,union jack,0.6,0.6,0.0,same,False,False,umbrella;woman;person
+831,What profession is the majority of the sideline?,other,photographer,photographer,0.0,0.0,0.0,same,False,False,camera;man;chair
+832,What style of hat is the man on the left wearing?,other,baseball cap,baseball cap,1.0,1.0,0.0,same,False,False,cap;man;person
+833,What is the woman in the back most likely pushing in the stroller?,activity_event,baby,baby,1.0,1.0,0.0,same,False,False,stroller;wheel;jacket
+834,What type of stroke is being used?,what_type_kind,overhand,overhand,0.0,0.0,0.0,same,False,False,racket;hand;arm
+835,What direction is this man going?,other,downhill,downhill,0.8999999999999999,0.8999999999999999,0.0,same,False,False,man;arm;leg
+836,What kind of plant is the red one near the door?,what_type_kind,poinsettia,poinsettia,1.0,1.0,0.0,same,False,False,door;plant;flower
+837,What does the triangular sign indicate?,text_sign_logo,yield,yield,0.3,0.3,0.0,same,False,False,sign;line;road
+838,What does the white cloud emitted by the train contain?,other,steam,steam,1.0,1.0,0.0,same,False,False,smoke;train car;wall
+839,What is the person using to capture an image?,other,phone,phone,1.0,1.0,0.0,same,False,False,woman;hand;food
+840,What has the man in the air used to wrap his hand?,other,tape,tape,1.0,1.0,0.0,same,False,False,arm;sock;jersey
+841,What are the ski poles being used for?,activity_event,skiing,skiing,0.6,0.6,0.0,same,False,False,ski pole;skier;arm
+842,What country is represented on his t-shirt?,other,usa,usa,1.0,1.0,0.0,same,False,False,shirt;boy;person
+843,What religion is represented at the top of the clock tower?,other,none,none,0.0,0.0,0.0,same,False,False,clock tower;tower;roof
+844,What is the age of this woman?,other,old,elderly,0.8999999999999999,0.3,-0.5999999999999999,left_better,False,False,woman;face;head
+845,What type of establishment are the pizza's presented?,what_type_kind,buffet,buffet,0.6,0.6,0.0,same,False,False,pizza;countertop;tray
+846,What is the boy using his phone to do?,other,record,record,1.0,1.0,0.0,same,False,False,phone;screen;hand
+847,What alcohol is in the glasses?,other,wine,wine,1.0,1.0,0.0,same,False,False,wine;hand;man
+848,What is the primary purpose for this train?,other,transportation,transportation,1.0,1.0,0.0,same,False,False,train;person;windshield
+849,Why is the person holding the phone up?,why,take picture,take picture,0.6,0.6,0.0,same,False,False,man;phone;face
+850,Who would be the coldest here based on the evidence?,other,middle person,middle man,0.0,0.0,0.0,same,False,False,man;jacket;hat
+851,What is the woman wearing?,other,white shirt,white shirt,0.0,0.0,0.0,same,False,False,shirt;tie;neck
+852,What are the cats laying next to?,other,remote controls,remote controls,0.6,0.6,0.0,same,False,False,remote;remote control;blanket
+853,The cows are located in what type of area?,what_type_kind,field,field,0.8999999999999999,0.8999999999999999,0.0,same,False,False,field;grass;animal
+854,What type of location is this?,what_type_kind,airport,airport,1.0,1.0,0.0,same,False,False,airport;person;suitcase
+855,The girl is holding the pizza with what?,other,mouth,mouth,1.0,1.0,0.0,same,False,False,mouth;hand;knife
+856,What type of boards are the people using?,what_type_kind,surfboards,surfboard,0.8999999999999999,0.3,-0.5999999999999999,left_better,False,False,surfboard;wetsuit;wave
+857,What is the man holding in his hands?,other,bat,bat,1.0,1.0,0.0,same,False,False,bat;glove;sleeve
+858,What company made the red bus to the right?,other,volvo,volvo,1.0,1.0,0.0,same,False,False,logo;man;headlight
+859,These bouquets are probably located in what kind of venue?,what_type_kind,home,home,1.0,1.0,0.0,same,False,False,table;flower;rose
+860,Which two words were said by both the person in black and the person in white here?,which,i do,i do,1.0,1.0,0.0,same,False,False,groom;bride
+861,The children pictured are likely photographed as part of what same group?,other,class,class,0.6,0.6,0.0,same,False,False,boy;glasses;building
+862,Where is the food being prepared?,where,grill,grill,1.0,1.0,0.0,same,False,False,grill;hand;pizza
+863,What type of furniture is the book on?,what_type_kind,table,table,1.0,1.0,0.0,same,False,False,table;sofa;couch
+864,What is the brick lined area against the wall on the left used to contain?,other,fire,fire,1.0,1.0,0.0,same,False,False,fireplace;mantle;picture
+865,What is this person jumping off of?,other,ramp,ramp,0.3,0.3,0.0,same,False,False,ramp;wall;ground
+866,What trick is the skateboarder performing?,other,rail grind,grind,0.6,0.0,-0.6,left_better,False,False,man;skateboard;pole
+867,What type of phone is being used?,what_type_kind,cell phone,cell phone,0.3,0.3,0.0,same,False,False,phone;woman;man
+868,Why are the people using umbrellas?,why,rain,rain,0.8999999999999999,0.8999999999999999,0.0,same,False,False,umbrella;sidewalk;bag
+869,The girl behind the man likely is of what relation to him?,other,daughter,daughter,1.0,1.0,0.0,same,False,False,man;girl;child
+870,What is the white appliance the people are looking in being used to store?,other,food,food,0.8999999999999999,0.8999999999999999,0.0,same,False,False,refrigerator;freezer;person
+871,In what area of the vehicle is the dog likely riding?,other,back seat,back seat,1.0,1.0,0.0,same,False,False,car;window;tag
+872,What is the cat laying inside?,other,laptop,laptop,1.0,1.0,0.0,same,False,False,laptop;table;paper
+873,Why are the bananas piled up on the shelf?,why,for sale,for sale,1.0,1.0,0.0,same,False,False,banana;crate;pineapple
+874,In addition to working what else does the group seem to be doing at the tables?,activity_event,socializing,socializing,0.3,0.3,0.0,same,False,False,laptop;woman;glass
+875,What is the dish and cup set positioned to resemble?,other,clock,clock,1.0,1.0,0.0,same,False,False,clock;saucer;cup
+876,What brand is a competitor of the brand on the billboard?,text_sign_logo,pepsi,pepsi,0.3,0.3,0.0,same,False,False,billboard;advertisement;van
+877,What is seen in the background of the photo?,other,city,city,1.0,1.0,0.0,same,False,False,city;building;person
+878,What is the man in the green sweatshirt holding?,other,teddy bear,teddy bear,1.0,1.0,0.0,same,False,False,bear;bike;bicycle
+879,What type of numbers does the clock face show?,what_type_kind,roman numerals,roman numerals,1.0,1.0,0.0,same,False,False,clock;man;dress
+880,What type of skateboard move is the man doing?,what_type_kind,grind,grind,1.0,1.0,0.0,same,False,False,man;skateboard;bench
+881,What is this type of maintenance of the animal group called?,other,herd,herd,0.3,0.3,0.0,same,False,False,cow;tag;ear
+882,The positioning of the horses suggests what level of formality?,other,formal,high,0.0,0.8999999999999999,0.8999999999999999,right_better,False,False,man;robe;boot
+883,What city is the team from?,other,spokane,spokane,1.0,1.0,0.0,same,False,False,uniform;shirt;jacket
+884,What type of television is the person watching?,what_type_kind,old fashioned,old,0.0,0.6,0.6,right_better,False,False,television;woman;cabinet
+885,Why does the man have an elevated arm?,why,walking,walking,0.3,0.3,0.0,same,False,False,arm;man;hand
+886,Which number on the monitor is higher?,text_sign_logo,97,97,0.0,0.0,0.0,same,False,False,monitor;screen;person
+887,What kind of ball is he going to hit with the racket?,what_type_kind,tennis ball,tennis,1.0,1.0,0.0,same,False,False,racket;leg;head
+888,What is a group of these animals called?,other,herd,herd,0.3,0.3,0.0,same,False,False,sheep;lamb;herd
+889,What goods does this man sell?,other,fruit,fruit,0.6,0.6,0.0,same,False,False,banana;apple;cauliflower
+890,The men facing the camera are all wearing what?,other,sunglasses,sunglasses,0.0,0.0,0.0,same,False,False,sunglasses;glasses;hat
+891,What continent is this?,other,europe,europe,1.0,1.0,0.0,same,False,False,building;church;tower
+892,What was the child given to eat?,other,banana,banana,1.0,1.0,0.0,same,False,False,banana;banana peel;arm
+893,What kind of precipitation is at the top of the mountain?,what_type_kind,snow,snow,1.0,1.0,0.0,same,False,False,snow;cloud;sky
+894,What is the boy in the middle in the red shirt holding?,other,trophy,trophy,1.0,1.0,0.0,same,False,False,racket;girl;hat
+895,What group of people is the yellow area under the bus created for?,other,pedestrians,pedestrians,0.0,0.0,0.0,same,False,False,platform;station;bike
+896,What type of boat is on the beach?,what_type_kind,small boat,small boat,0.0,0.0,0.0,same,False,False,boat;bird;person
+897,What structure is contained beyond the large rippled metal door in the background in front of the black car?,other,building,building,0.0,0.0,0.0,same,False,False,building;awning;person
+898,Why are there so many bicycles here?,why,bike path,city bike culture,0.0,0.0,0.0,same,False,False,bicycle;bike;person
+899,What is between the two meals?,other,bottle,bottle,0.3,0.3,0.0,same,False,False,bottle;table;paper
+900,The last letter near the bowl is needed to spell what word?,text_sign_logo,geot,geot,0.0,0.0,0.0,same,False,False,box;bowl;sink
+901,What type of food is on display in this shop?,what_type_kind,desserts,desserts,0.3,0.3,0.0,same,False,False,cake;pastry;dessert
+902,Why is there a rack on the front of the bus?,why,bike rack,bike rack,0.0,0.0,0.0,same,False,False,bumper;front;mirror
+903,Where might this bench be located?,where,beach,beach,0.6,0.6,0.0,same,False,False,bench;grass;ocean
+904,What is the boy behind the player picking up?,other,shoe,shoe,0.0,0.0,0.0,same,False,False,shoe;sock;wristband
+905,Who is the most vulnerable on the road?,other,motorcyclist,motorcyclist,0.6,0.6,0.0,same,False,False,motorcycle;shoe;tire
+906,What was the player doing before running?,activity_event,standing,standing,0.3,0.3,0.0,same,False,False,helmet;hat;player
+907,What part of the street are the pedestrians waiting at?,other,crosswalk,crosswalk,1.0,1.0,0.0,same,False,False,line;street;light
+908,In what city is this street most probably located?,other,tottenham,tottenham,1.0,1.0,0.0,same,False,False,sign;building;street
+909,What country is there?,other,usa,usa,1.0,1.0,0.0,same,False,False,flag;umpire;player
+910,What food is the brown powder sprinkled on the drink?,what_object,coffee,coffee,0.6,0.6,0.0,same,True,True,cup;donut;pastry
+911,How many cows are on the hill?,how_many,3,3,0.0,0.0,0.0,same,True,True,cow;hill;mountain
+912,What is the make of the silver hatchback?,other,unanswerable,unanswerable,0.0,0.0,0.0,same,False,False,car;bridge;mountain
+913,What is sitting next to the sandwich in a bowl?,other,salad,salad,1.0,1.0,0.0,same,False,False,salad;bowl;shaker
+914,The appearance of the long grass in the foreground indicates what ambient effect?,other,windy,windy,0.3,0.3,0.0,same,False,False,grass;field;tree
+915,Who is the manufacturer of the truck?,other,isuzu,isuzu,1.0,1.0,0.0,same,False,False,truck;license plate;bumper
+916,The kite is flying in what direction?,other,up,up,0.0,0.0,0.0,same,False,False,kite;sky;cloud
+917,What shape is the donut in?,other,bear,bear,0.0,0.0,0.0,same,False,False,toy;dessert;food
+918,What is this wall used for?,activity_event,decor,decorating,0.0,0.0,0.0,same,False,False,wall;picture;couch
+919,What kind of fruit is cut up next to the ham?,what_type_kind,apple,apple,0.8999999999999999,0.8999999999999999,0.0,same,False,False,apple;carrot;potato
+920,What is the man wearing the baseball cap and sunglasses doing on the mountain?,activity_event,skiing,skiing,1.0,1.0,0.0,same,False,False,ski;skier;coat
+921,The animals are feeding on the?,other,grass,grass,1.0,1.0,0.0,same,False,False,zebra;grass;rock
+922,The first number on the bus is needed to from what sequence?,text_sign_logo,101,101,0.0,0.0,0.0,same,False,False,bus;sign;street
+923,What is in the lead?,other,horse,horse,1.0,1.0,0.0,same,True,True,horse;person;flag
+924,What type of vehicle is this?,what_type_kind,bus,bus,1.0,1.0,0.0,same,False,False,bus;road;curb
+925,What type of building appears in the background?,what_type_kind,government,government,0.3,0.3,0.0,same,False,False,building;flag;traffic light
+926,What kind of setting is this?,what_type_kind,kitchen,kitchen,1.0,1.0,0.0,same,False,False,kitchen;pipe;countertop
+927,What kind of vehicle is in the opening?,what_type_kind,truck,truck,1.0,1.0,0.0,same,False,False,truck;building;sign
+928,What do you call the number of people sitting on the bench?,text_sign_logo,three,three,1.0,1.0,0.0,same,False,False,person;woman;chair
+929,What have the pastries on the table been covered with?,other,cream,cream,0.0,0.0,0.0,same,False,False,cheese;cookie;plate
+930,What is in the pink packet near the fork that someone may add to a coffee?,other,sweetener,sweetener,0.0,0.0,0.0,same,True,True,cup;napkin;avocado
+931,The cat is doing what?,activity_event,laying,laying,0.8999999999999999,0.8999999999999999,0.0,same,False,False,cat;paw;head
+932,What. is hanging on her shoulder?,other,backpack,backpack,0.0,0.0,0.0,same,False,False,bag;jacket;jean
+933,What kind of vehicle is the one that says Deere?,what_type_kind,excavator,excavator,0.0,0.0,0.0,same,False,False,crane;vehicle;machine
+934,The room can be described as what?,other,living room,living room,0.3,0.3,0.0,same,False,False,table;window;curtain
+935,Who is in the most danger from cars?,other,cows,cows,0.0,0.0,0.0,same,False,False,man;cow;bicycle
+936,What are the people holding in their hands?,other,frisbees,frisbees,1.0,1.0,0.0,same,False,False,frisbee;girl;woman
+937,What country can you learn about travel to if you visit the website on the bus?,other,malaysia,malaysia,1.0,1.0,0.0,same,False,False,man;woman;bus
+938,Which food item has the most starch?,which,potatoes,potato,1.0,1.0,0.0,same,False,False,potato;carrot;broccoli
+939,Where is this person located?,where,office,office,1.0,1.0,0.0,same,False,False,man;desk;table
+940,The advertisement on the bus is for what type of medium?,what_type_kind,movie,movie,1.0,1.0,0.0,same,False,False,sign;letter;chair
+941,What is the favorite color of the person who lives here?,color,purple,purple,1.0,1.0,0.0,same,False,False,wall;blanket;carpet
+942,What are the horses feet called?,other,hoof,hoof,0.0,0.0,0.0,same,False,False,hoof;leg;person
+943,What type of animals are the kites representing?,what_type_kind,seahorses,seahorses,1.0,1.0,0.0,same,False,False,kite;bird;tail
+944,What type of foods are in the basket?,what_type_kind,apples,apples,1.0,1.0,0.0,same,False,False,apple;boy;child
+945,Which of these people is very warm?,which,left,left,0.0,0.0,0.0,same,False,False,woman;sweater;jacket
+946,What is not allowed in this area of the sidewalk?,other,parking,parking,1.0,1.0,0.0,same,False,False,table;chair;road
+947,What are the items on the right?,other,boats,boats,1.0,1.0,0.0,same,False,False,boat;pole;post
+948,What was used to cover the salad on the left?,other,aluminum foil,aluminum foil,0.3,0.3,0.0,same,False,False,bowl;spoon;tray
+949,What is the biggest risk of this sport?,other,injury,injury,0.0,0.0,0.0,same,False,False,person;boy;man
+950,What is the name of a famous man associated with this sport?,other,roger federer,roger federer,0.0,0.0,0.0,same,False,False,man;woman;band
+951,Why is the man looking down?,why,reading,reading,1.0,1.0,0.0,same,False,False,man;head;arm
+952,What type of boat this is called as?,what_type_kind,sailboat,sailboat,1.0,1.0,0.0,same,False,False,boat;mast;harbor
+953,Why are the men wearing a hat?,why,uniform,uniform,0.6,0.6,0.0,same,False,False,hat;head;leg
+954,What kind of shoes is this tennis player wearing?,what_type_kind,tennis shoes,tennis shoes,0.6,0.6,0.0,same,False,False,shoe;wristband;tennis court
+955,What kind of bird is this?,what_type_kind,stork,stork,0.6,0.6,0.0,same,False,False,bird;head;wing
+956,What type of computer is the woman sitting in front of?,what_type_kind,iMac,iMac,1.0,1.0,0.0,same,False,False,computer;monitor;table
+957,What company made the cleats the batter wearing?,other,under armour,under armour,1.0,1.0,0.0,same,False,False,shoe;man;jersey
+958,Where are these elephants located?,where,background,background,0.3,0.3,0.0,same,False,False,elephant;field;trunk
+959,How ripe is the banana?,other,very ripe,very ripe,0.3,0.3,0.0,same,False,False,banana;block;stick
+960,The person opposite the court to the player holding the racquet is preparing to do what?,activity_event,serve,serve,0.8999999999999999,0.8999999999999999,0.0,same,False,False,ball;person;woman
+961,What style of cuisine is being served?,other,asian,asian,0.8999999999999999,0.8999999999999999,0.0,same,False,False,food;chicken;meal
+962,The colors on the bus match the colors on what flag?,other,none,none,0.0,0.0,0.0,same,False,False,bus;van;flower
+963,What is the person standing on?,other,skateboard,skateboard,1.0,1.0,0.0,same,False,False,skateboard;jean;man
+964,What section are the people in?,other,produce market,produce market,0.0,0.0,0.0,same,False,False,market;person;boy
+965,Where is the person while flying the kite?,where,beach,beach,1.0,1.0,0.0,same,False,False,beach;sand;ocean
+966,What is the pet doing?,activity_event,sitting,sitting,1.0,1.0,0.0,same,False,False,dog;helmet;motorcycle
+967,What kind of hat is the man wearing?,what_type_kind,top hat,top hat,1.0,1.0,0.0,same,False,False,hat;head;tie
+968,What are the woman's eyes doing?,activity_event,looking forward,looking at camera,0.0,0.0,0.0,same,False,False,woman;hair;tie
+969,They are most likely viewing the caged bird where?,where,living room,living room,1.0,1.0,0.0,same,False,False,television;woman;bird cage
+970,Where are these zebras located?,where,grass covered field,field,0.0,1.0,1.0,right_better,False,False,field;grass;trail
+971,What time of year was the picture likely taken?,other,fall,fall,1.0,1.0,0.0,same,False,False,leaf;sidewalk;shoe
+972,Which arm is the tennis player wearing a band on?,which,none,none,0.0,0.0,0.0,same,False,False,racket;shirt;person
+973,What is keeping the person's hands clean from the food?,other,paper container,paper container,0.3,0.3,0.0,same,False,False,box;thumb;sleeve
+974,What vehicle are the people riding on?,other,motorcycles,motorcycle,1.0,1.0,0.0,same,False,False,motorcycle;bike;tire
+975,Where are the two playing frisbee?,where,indoor court,indoor court,0.0,0.0,0.0,same,False,False,man;court;arm
+976,What kind of train is in the photo?,what_type_kind,passenger,cargo,0.0,0.6,0.6,right_better,False,False,train;tank;pole
+977,What likely made the markings in the open book?,other,pen,pen,1.0,1.0,0.0,same,False,False,cat;pen;notebook
+978,What are the people riding in the water?,other,surfboards,surfboards,1.0,1.0,0.0,same,False,False,surfboard;wave;board
+979,What type of room is this?,what_type_kind,living room,living room,0.0,0.0,0.0,same,False,False,room;rug;couch
+980,What is pan made of?,other,metal,metal,1.0,1.0,0.0,same,False,False,bowl;spoon;rim
+981,The large white building to the far left on the shore is likely the main facility governing what object/structure on the water?,what_object,boat,boat,0.0,0.0,0.0,same,True,True,boat;dock;harbor
+982,Why is the boy using a glove?,why,to catch ball,to catch ball,0.8999999999999999,0.8999999999999999,0.0,same,False,False,glove;boy;baseball player
+983,How many people at least share this bathroom?,how_many,2,2,0.0,0.0,0.0,same,True,True,sink;cabinet;toilet tank
+984,The time of day suggests the man will do what soon?,other,wake up,wake up,1.0,1.0,0.0,same,False,False,man;cat;kitten
+985,What service is being offered for riders on the blue and white bus?,other,coast tour,coast tour,1.0,1.0,0.0,same,False,False,bus;license plate;headlight
+986,How many people are wearing hats?,how_many,1,1,0.0,0.0,0.0,same,True,True,man;hat;person
+987,What is the child eating?,other,fried rice,fried rice,0.6,0.6,0.0,same,False,False,rice;plate;girl
+988,What is to the left of the woman?,other,microwave,microwave,1.0,1.0,0.0,same,False,False,microwave;keyboard;monitor
+989,What are these people attending?,other,wine tasting,wine tasting,1.0,1.0,0.0,same,False,False,woman;wine bottle;shoe
+990,The small hand of the clock on the wall is closest to what number?,text_sign_logo,12,12,0.3,0.3,0.0,same,False,False,clock;plate;sink
+991,What kind of drink is advertised?,what_type_kind,stella artois,stella artois,1.0,1.0,0.0,same,False,False,sign;building;window
+992,What are the two people in the picture doing?,activity_event,skiing,skiing,1.0,1.0,0.0,same,False,False,ski;helmet;jacket
+993,What type of shot is the man hitting?,what_type_kind,overhand,overhand,0.0,0.0,0.0,same,False,False,ball;tennis racket;racket
+994,What appliance is next to an appliance that is highly decorated?,what_object,stove,stove,1.0,1.0,0.0,same,True,True,refrigerator;stove;microwave
+995,What is the long bar of the bicycle?,other,frame,frame,0.8999999999999999,0.8999999999999999,0.0,same,False,False,handle;bicycle;bike
+996,What kind of cuisine does this food from?,what_type_kind,asian,asian,0.6,0.6,0.0,same,False,False,beef;noodle;vegetable
+997,What time of day was this?,other,evening,evening,1.0,1.0,0.0,same,False,False,light;lamp post;water
+998,What item of visible clothing is red?,what_object,shirt,jacket,1.0,0.0,-1.0,left_better,True,True,shirt;man;apron
+999,What is going on top of the red sauce?,other,tomato,tomato,1.0,1.0,0.0,same,False,False,hand;finger;vegetable
+1000,How many animal trunks are visible here?,how_many,3,3,0.0,0.0,0.0,same,True,True,elephant;trunk;head
+1001,What U.S. city is the most likely setting for this street?,activity_event,new york,new york,1.0,1.0,0.0,same,False,False,bus;building;street
+1002,What is the man doing with the ropes in his hands?,activity_event,holding,pulling,0.0,0.0,0.0,same,False,False,carriage;man;person
+1003,What is holding the man's feet?,other,horse,horse,0.0,0.0,0.0,same,True,True,saddle;horse;leg
+1004,What could keep this food from falling apart?,other,plate,plate,0.0,0.0,0.0,same,False,False,plate;sandwich;bread
+1005,What is the most diverse seashore bird?,other,seagull,pelican,0.6,0.3,-0.3,left_better,False,False,bird;wave;beach
+1006,What service is offered for free behind the woman in red?,other,parking,parking,1.0,1.0,0.0,same,False,False,sign;wall;road
+1007,What kind of gathering does this look like?,what_type_kind,family dinner,family dinner,0.0,0.0,0.0,same,False,False,woman;boy;girl
+1008,What has this stove been used for?,activity_event,bake,cooking,0.0,0.6,0.6,right_better,False,False,pan;food;burner
+1009,What type of telephone is in the room?,what_type_kind,cordless,cordless,0.8999999999999999,0.8999999999999999,0.0,same,False,False,phone;speaker;painting
+1010,What does the blue sign indicate?,text_sign_logo,parking,parking,1.0,1.0,0.0,same,False,False,sign;arrow;traffic light
+1011,Which person is controlling the horse?,which,woman,woman,1.0,1.0,0.0,same,False,False,woman;man;hand
+1012,What ingredient is used first on the pizza?,other,dough,dough,0.3,0.3,0.0,same,False,False,bowl;pizza;cutting board
+1013,What century were these invented in?,other,20th,20th,0.8999999999999999,0.8999999999999999,0.0,same,False,False,engine;airplane;vehicle
+1014,What type of shop is to the right of the silver bus?,what_type_kind,walgreens,drugstore,0.6,0.3,-0.3,left_better,False,False,building;sign;window
+1015,What kind of landscapes are present?,what_type_kind,mountains,mountains,0.0,0.0,0.0,same,False,False,mountain;grass;bush
+1016,In what environment is the meal taking place?,other,outdoor,outdoor,0.3,0.3,0.0,same,False,False,table;plant;bread
+1017,Athletes often participate in what activity to warm up their muscles before starting?,activity_event,stretching,stretching,1.0,1.0,0.0,same,False,False,man;woman;leg
+1018,What are the zebras doing?,activity_event,grazing,grazing,1.0,1.0,0.0,same,False,False,zebra;grass;head
+1019,What is powering the bikes?,other,dogs,dogs,1.0,1.0,0.0,same,False,False,dog;man;animal
+1020,What animal has a similar nose to this animal?,what_object,elephant,elephant,0.3,0.3,0.0,same,True,True,elephant;trunk;foot
+1021,What does the person who spends time in this room like to do?,other,read,read,1.0,1.0,0.0,same,False,False,cat;book;bookshelf
+1022,What do the black seats appear to be made from?,other,leather,leather,1.0,1.0,0.0,same,False,False,seat;chair;person
+1023,What is the main liquid topping on this food?,other,sauce,sauce,0.6,0.6,0.0,same,False,False,sauce;liquid;drink
+1024,What kind of room is it?,what_type_kind,bedroom,bedroom,1.0,1.0,0.0,same,False,False,bed;ceiling fan;room
+1025,What kind of drink is in the glasses?,what_type_kind,wine,wine,1.0,1.0,0.0,same,False,False,wine;man;person
+1026,How would you eat this food?,other,peel and eat,peel and eat,0.0,0.0,0.0,same,False,False,banana;banana bunch;bunch
+1027,In which city does this bus travel?,which,san francisco,san francisco,1.0,1.0,0.0,same,False,False,sign;license plate;tire
+1028,Where is this person watching television?,where,living room,living room,1.0,1.0,0.0,same,False,False,living room;entertainment center;laptop
+1029,What is the large black appliance on the wood table used to do?,other,heat food,heat food,0.8999999999999999,0.8999999999999999,0.0,same,False,False,microwave;control panel;button
+1030,What food is associated with the name on the sign to the far left?,what_object,dunkin donuts,dunkin donuts,0.0,0.0,0.0,same,False,False,sign;logo;person
+1031,Why does the person have their mouth open?,why,eating,eating,0.8999999999999999,0.8999999999999999,0.0,same,False,False,girl;man;food
+1032,What famous sports star wore this number jersey?,text_sign_logo,derek jeter,derek jeter,0.3,0.3,0.0,same,False,False,shirt;number;batter
+1033,What is the meat inside the yellow roll?,other,hot dog,hot dog,1.0,1.0,0.0,same,False,False,meat;sandwich;ham
+1034,Where are these men located?,where,woods,forest,1.0,1.0,0.0,same,False,False,man;person;ground
+1035,Why are the trees without leaves?,why,winter,winter,0.3,0.3,0.0,same,False,False,tree;suv;pole
+1036,How did the person wearing blue come to be in the position they are in?,other,fell,fell,0.6,0.6,0.0,same,False,False,snow;ski;pole
+1037,If the bus shown wants to to the way they have come what may they do?,other,turn left,turn left,0.0,0.0,0.0,same,False,False,bus;sign;pole
+1038,What is the man sitting inside?,other,refrigerator,refrigerator,0.8999999999999999,0.8999999999999999,0.0,same,False,False,refrigerator;man;shelf
+1039,What are the cushions made out of?,other,wood,wood,0.0,0.0,0.0,same,False,False,bat;baseball bat;box
+1040,What is the cat looking at?,other,camera,camera,1.0,1.0,0.0,same,False,False,mouse;computer mouse;face
+1041,How many remotes are on the table?,how_many,2,2,0.0,0.0,0.0,same,False,False,remote;remote control;magazine
+1042,What is the first number on the motorcycle?,text_sign_logo,4,4,0.0,0.0,0.0,same,False,False,motorcycle;writing;logo
+1043,How many people are standing in the courtyard?,how_many,3,three,0.0,0.0,0.0,same,True,True,person;door;dome
+1044,The characters in the yellow plate at the back of the bike is called what?,other,flowld,flowld,0.0,0.0,0.0,same,False,False,license plate;plate;light
+1045,Which vehicle is leading traffic?,which,trolley,trolley,0.8999999999999999,0.8999999999999999,0.0,same,False,False,trolley;train;woman
+1046,What is the white appliance against the right wall used for?,activity_event,dry hair,dry hair,0.3,0.3,0.0,same,False,False,dryer;sink;faucet
+1047,When playing tennis what is the name of the actual event?,activity_event,serve,serve,0.0,0.0,0.0,same,False,False,man;racket;ball
+1048,What department would use this fixture?,other,fire department,fire department,1.0,1.0,0.0,same,False,False,fire hydrant;street;sidewalk
+1049,What is the woman using the pen to do?,other,write,write,1.0,1.0,0.0,same,False,False,paper;hand;woman
+1050,Where is the person browsing?,where,laptop,laptop,0.0,0.0,0.0,same,False,False,laptop;woman;girl
+1051,Where is the game most likely being played?,where,tennis court,tennis court,1.0,1.0,0.0,same,False,False,man;tennis racket;ball
+1052,What kind of plane is this?,what_type_kind,jetliner,jetliner,0.0,0.0,0.0,same,False,False,airplane;logo;name
+1053,What are the people in blue doing on top of the elephants?,activity_event,riding,riding,1.0,1.0,0.0,same,False,False,man;hat;shirt
+1054,What type of event is happening?,what_type_kind,pizza party,party,1.0,0.3,-0.7,left_better,False,False,girl;boy;woman
+1055,What does the kite look like?,other,rainbow colored,rainbow colored,0.0,0.0,0.0,same,False,False,kite;tail;bench
+1056,What is the elephant doing near the post?,activity_event,standing,standing,0.0,0.0,0.0,same,False,False,elephant;head;trunk
+1057,What is behind the tractor?,other,boat,boat,0.8999999999999999,0.8999999999999999,0.0,same,True,True,boat;water;ocean
+1058,How are the people communicating?,other,cell phones,cell phones,0.3,0.3,0.0,same,False,False,man;woman;cellphone
+1059,What is preventing the open objects from flying off?,other,strings,strings,0.3,0.3,0.0,same,False,False,wire;umbrella;handle
+1060,Which of these consumables is caffeinated?,which,soda,soda,0.0,0.0,0.0,same,False,False,can;bottle;cup
+1061,The man on the left dressed in a blue uniform has what on his hand?,other,glove,glove,0.8999999999999999,0.8999999999999999,0.0,same,False,False,mitt;glove;shoe
+1062,What drink is being made?,other,margarita,margarita,1.0,1.0,0.0,same,False,False,blender;cup;glass
+1063,What weather event has caused the girl to use the umbrella?,activity_event,rain,rain,1.0,1.0,0.0,same,False,False,sky;umbrella;girl
+1064,What type of trick is the man in black doing?,what_type_kind,flip,flip,0.3,0.3,0.0,same,False,False,skateboard;ramp;helmet
+1065,What other surface is this game played on?,other,grass,grass,0.8999999999999999,0.8999999999999999,0.0,same,False,False,man;player;tennis court
+1066,What body of water is this?,other,river,river,0.8999999999999999,0.8999999999999999,0.0,same,False,False,water;boat;reflection
+1067,What dish is being made?,other,fruit salad,fruit salad,1.0,1.0,0.0,same,False,False,fruit;salad;person
+1068,What is the name of the person winning on the scoreboard?,other,adrian manan,adrian manan,0.0,0.0,0.0,same,False,False,man;scoreboard;ball
+1069,Where are the men in the back directing the animals to?,where,pasture,pasture,0.3,0.3,0.0,same,False,False,sheep;goat;fence
+1070,How do these people know each other?,other,twins,twins,0.6,0.6,0.0,same,False,False,child;baby;mouth
+1071,What specifically is the child consuming?,other,pizza,pizza,0.6,0.6,0.0,same,False,False,pizza;boy;glass
+1072,What meal is the food being served for?,other,snack,snack,0.0,0.0,0.0,same,False,False,food;hand;tray
+1073,What animals are shown in the picture?,other,elephants,elephants,1.0,1.0,0.0,same,True,True,elephant;man;grass
+1074,What business transaction is advertised on a billboard?,other,banking,banking,0.8999999999999999,0.8999999999999999,0.0,same,False,False,building;traffic light;box
+1075,What number comes after the number on the man's jersey when you count to twenty?,text_sign_logo,11,11,0.8999999999999999,0.8999999999999999,0.0,same,False,False,number;jersey;man
+1076,What part of the woman's lower half is visible?,other,skirt,skirt,0.0,0.0,0.0,same,False,False,skirt;shoe;shirt
+1077,What is the colorful object on the man's head used for?,activity_event,shade,shade,1.0,1.0,0.0,same,False,False,umbrella;hat;cap
+1078,The girl may be eating lunch at what daytime facility?,other,school,school,1.0,1.0,0.0,same,False,False,girl;pepperoni;crust
+1079,What is the object in the person's hand used for?,activity_event,type,typing,0.0,0.3,0.3,right_better,False,False,mouse;keyboard;key
+1080,What brand are the batter's shoes?,text_sign_logo,nike,nike,0.3,0.3,0.0,same,False,False,shoe;boy;shirt
+1081,The man's physique can be described as being what?,other,athletic,athletic,0.8999999999999999,0.8999999999999999,0.0,same,False,False,man;leg;shoe
+1082,What is the man in green's job?,other,construction worker,construction worker,0.3,0.3,0.0,same,False,False,man;pant;tire
+1083,What is the boy holding in his left hand?,other,remote control,remote control,0.8999999999999999,0.8999999999999999,0.0,same,False,False,remote;tshirt;head
+1084,What is this street vendor in black shirt and hat selling at her stand?,other,strawberries,strawberries,0.0,0.0,0.0,same,False,False,food;stand;sidewalk
+1085,What are the dog's owners likely doing?,activity_event,moving,moving,1.0,1.0,0.0,same,False,False,dog;tongue;house
+1086,What is the object connecting the plane to the tunnel?,other,bridge,bridge,0.0,0.0,0.0,same,False,False,ramp;stair;suitcase
+1087,Why is one player wearing gloves?,why,for protection,to protect hands,0.0,0.0,0.0,same,False,False,glove;hand;player
+1088,How does the boy feel about the box he is holding?,other,happy,happy,1.0,1.0,0.0,same,False,False,boy;box;pizza
+1089,What word comes before the word stopping on the sign?,text_sign_logo,NO,NO,1.0,1.0,0.0,same,False,False,sign;street;parking meter
+1090,Which country's flag is on the plane?,which,usa,usa,0.8999999999999999,0.8999999999999999,0.0,same,False,False,flag;airplane;person
+1091,What is the cat doing?,activity_event,sitting,sitting,0.0,0.0,0.0,same,False,False,cat;leg;table
+1092,What is in the person's mouth?,other,cigarette,cigarette,1.0,1.0,0.0,same,True,True,phone;cigarette;finger
+1093,What store is in the background?,other,chanel,chanel,1.0,1.0,0.0,same,False,False,building;sign;woman
+1094,What is the first player's initial?,other,f,f,1.0,1.0,0.0,same,False,False,man;head;leg
+1095,The object covering this man's face is a called what?,other,umbrella,umbrella,1.0,1.0,0.0,same,False,False,umbrella;man;light
+1096,What is the possible hazard faced by the animal?,other,spill,slippery,0.0,0.0,0.0,same,False,False,cat;glass;water
+1097,Using the object the girl is carrying will require some of what element?,other,strength,strength,0.0,0.0,0.0,same,False,False,kite;girl;hand
+1098,What breakfast item is on the woman's plate?,other,bagel,bagel,1.0,1.0,0.0,same,False,False,woman;plate;cup
+1099,What is causing the disturbance of the sand?,other,horses,horses,0.8999999999999999,0.8999999999999999,0.0,same,False,False,horse;ocean;water
+1100,What breed is the brown cow?,other,not possible,beef cow,0.0,0.0,0.0,same,False,False,cow;calf;nose
+1101,What is the dog doing with the bovines here?,activity_event,herding,herding,0.6,0.6,0.0,same,False,False,dog;cow;head
+1102,What are these two players doing?,activity_event,shaking hands,shaking hands,0.3,0.3,0.0,same,False,False,net;racket;person
+1103,What does the Ice cream truck say to watch out for?,other,chicken,chicken,0.3,0.3,0.0,same,False,False,man;truck;traffic light
+1104,What are the zebras standing in?,other,grass,grass,1.0,1.0,0.0,same,False,False,grass;zebra;mane
+1105,What type of game he played?,what_type_kind,skateboarding,skateboarding,0.6,0.6,0.0,same,False,False,skateboard;person;shoe
+1106,What is the name of the lip piercing that the girl in the foreground has?,other,labret,labret,0.0,0.0,0.0,same,False,False,mouth;face;eyebrow
+1107,What can be divined from the thing hanging on the fridge?,other,calendar,calendar,0.0,0.0,0.0,same,False,False,calendar;stove;kettle
+1108,What is sold at 134 on this street?,other,food,food,0.6,0.6,0.0,same,False,False,building;bench;table
+1109,What will happen if the ball is hit past the fence by the batter?,other,out,out,0.0,0.0,0.0,same,False,False,fence;man;player
+1110,What does the sticker advise you to stop eating?,other,animals,animals,1.0,1.0,0.0,same,False,False,sticker;sign;stop
+1111,How are the eggs cooked?,other,scrambled,scrambled,1.0,1.0,0.0,same,False,False,egg;meat;bacon
+1112,Why is one window outlined in white on the side of the plane?,why,window,it's a window,0.0,0.0,0.0,same,False,False,window;cockpit;door
+1113,What is the brown bear in the grey and black jacket doing?,activity_event,skiing,skiing,0.0,0.0,0.0,same,False,False,ski;teddy bear;head
+1114,What is the name of the type of business where the product in the foreground of this picture would be purchased?,where,bakery,bakery,1.0,1.0,0.0,same,False,False,cake;woman;face
+1115,What is the term for the brown marks on the bottom portion of the fire hydrant?,other,rust,rust,0.8999999999999999,0.8999999999999999,0.0,same,False,False,fire hydrant;bolt;curb
+1116,What kind of temperature is provided in the area where the bottles are?,where,cold,cold,0.6,0.6,0.0,same,False,False,refrigerator;shelf;drawer
+1117,Which object at the table is most used with a flame?,which,candle,candle,1.0,1.0,0.0,same,False,False,candle;food;bowl
+1118,What must the player in blue touch the player in red with to 'win' the play?,other,base,base,0.3,0.3,0.0,same,False,False,glove;helmet;hat
+1119,Which fruit seen here is most likely to be thrown away first?,activity_event,banana,banana,1.0,1.0,0.0,same,False,False,banana;apple;dress
+1120,What percent of the stands are full?,other,20%,0,0.0,0.0,0.0,same,False,False,stand;stair;man
+1121,Which of the fruits shown has a seed that is easier to see?,which,banana,banana,0.6,0.6,0.0,same,False,False,banana;spot;table
+1122,What is the top level of the busses used for?,activity_event,sightseeing,sightseeing,0.6,0.6,0.0,same,False,False,bus;woman;sign
+1123,Someone standing on Platform 3 here must do what to board a train?,other,wait,wait,0.6,0.6,0.0,same,False,False,train;platform;sign
+1124,What team does the batter play for?,other,dodgers,dodgers,1.0,1.0,0.0,same,False,False,jersey;player;catcher
+1125,What brand of shoes are on their feet?,text_sign_logo,nike,nike,1.0,1.0,0.0,same,False,False,boy;girl;shoe
+1126,What sort of spice will most likely be added to the fried vegetable here?,activity_event,salt,salt,1.0,1.0,0.0,same,False,False,jar;bottle;french fry
+1127,Why is there a mat on the floor?,why,to catch spills,to catch spills,0.0,0.0,0.0,same,False,False,mat;floor;kitchen
+1128,What era are the gold chairs styled from?,other,victorian,victorian,0.6,0.6,0.0,same,False,False,chair;window;couch
+1129,What position does the man holding the brown glove play?,other,catcher,catcher,1.0,1.0,0.0,same,False,False,catcher;player;mask
+1130,What will the child do here as they blow out the candles?,other,sing,sing,0.0,0.0,0.0,same,False,False,boy;girl;candle
+1131,What kind of a lounge is this?,what_type_kind,business,business,0.6,0.6,0.0,same,False,False,sign;woman;man
+1132,What is the name of the player's hair style?,other,ponytail,ponytail,0.6,0.6,0.0,same,False,False,hair;head;face
+1133,Given the stance of the batter the player is most likely?,activity_event,ready to swing,ready to swing,0.0,0.0,0.0,same,False,False,bat;player;arm
+1134,Why is the guy standing in the median?,why,waiting to cross,waiting to cross,0.0,0.0,0.0,same,False,False,person;man;woman
+1135,What is the bike rider looking for?,other,crossing,crossing,0.0,0.0,0.0,same,False,False,bus;sign;street
+1136,Which team is in white/orange?,which,houston rockets,houston rockets,0.0,0.0,0.0,same,False,False,player;sock;shirt
+1137,What has the fire hydrant been painted to resemble?,other,face,face,0.8999999999999999,0.8999999999999999,0.0,same,False,False,fire hydrant;base;sidewalk
+1138,How can you tell the incense has been burned already?,other,smoke,smoke,0.0,0.0,0.0,same,False,False,cup;bowl;plate
+1139,Why is the lady laying propped up?,why,comfort,comfort,0.0,0.0,0.0,same,False,False,pillow;headboard;sheet
+1140,What must be activated so the parked cars stay in place?,other,brake,brake,0.0,0.0,0.0,same,False,False,car;pole;fire hydrant
+1141,What mechanism might all different modes of transportation seen here employ to stop?,other,brake,brake,0.3,0.3,0.0,same,False,False,train;car;engine
+1142,What brand of hair product does he have?,text_sign_logo,not possible,not possible,0.0,0.0,0.0,same,False,False,curtain;apple;hair
+1143,What is the pattern on the woman's coat called?,other,plaid,plaid,0.8999999999999999,0.8999999999999999,0.0,same,False,False,jacket;woman;jean
+1144,What does the yellow sign advise you to watch for?,text_sign_logo,pedestrians,pedestrians,0.8999999999999999,0.8999999999999999,0.0,same,False,False,car;cone;bush

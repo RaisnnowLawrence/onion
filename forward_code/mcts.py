@@ -173,6 +173,7 @@ class MCTSQuestionSample(QuestionSample):
         self.action_objects = {}      # 动作名 -> 物体名映射：{"focus_cat": "cat", ...}
         self.action_prompts = {}      # 动作名 -> 描述文本
         self.detected_objects = []    # SAM实际检测到的物体，便于日志分析
+        self.action_marker_ids = {}   # 动作名 -> 轻量标记编号
 
         # 动作执行器映射：动作名 → 对应函数（focus_* 共用 execute_focus_object_action）
         self.action_executors = {
@@ -663,6 +664,80 @@ class MCTSQuestionSample(QuestionSample):
         child.valid_area_ratio = new_state['valid_area_ratio']
         return child
 
+    # ====================== 动作：轻量编号提示（尽量少改图像） ======================
+    def execute_marker_object_action(self, node, action_name):
+        """用小编号点提示目标位置，并在角落给出编号说明，避免大面积覆盖图像。"""
+        object_name = self.action_objects[action_name]
+        marker_id = self.action_marker_ids.get(action_name, 1)
+        image_pil = self._base64_to_image(node.state['image'])
+        if image_pil.mode != 'RGB':
+            image_pil = image_pil.convert('RGB')
+
+        try:
+            with torch.no_grad():
+                text_mask = self.sam_model.predict([image_pil], [object_name])
+            first_result = text_mask[0]
+            masks = first_result.get('masks', None)
+
+            if masks is None or len(masks) == 0:
+                enhanced_base64 = node.state['image']
+            else:
+                mask_array = masks[0] if isinstance(masks[0], np.ndarray) else np.array(masks[0])
+                if mask_array.dtype != bool:
+                    mask_array = mask_array > 0
+                y_idx, x_idx = np.where(mask_array)
+                x1, y1 = int(np.min(x_idx)), int(np.min(y_idx))
+                x2, y2 = int(np.max(x_idx)), int(np.max(y_idx))
+
+                image_np = np.array(image_pil).copy()
+                h, w = image_np.shape[:2]
+                radius = max(4, min(w, h) // 90)
+                thickness = max(1, radius // 3)
+                font_scale = max(0.35, min(w, h) / 1400.0)
+                font_thickness = max(1, int(round(font_scale * 2)))
+
+                # Put the marker near the bbox corner, clamped inside the image.
+                mx = min(max(x1, radius + 2), w - radius - 2)
+                my = min(max(y1, radius + 2), h - radius - 2)
+                color = (255, 225, 0)
+                shadow = (0, 0, 0)
+                cv2.circle(image_np, (mx, my), radius + 2, shadow, -1)
+                cv2.circle(image_np, (mx, my), radius, color, -1)
+                cv2.circle(image_np, (mx, my), radius, shadow, thickness)
+                cv2.putText(image_np, str(marker_id), (mx - radius // 2, my + radius // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, shadow, font_thickness)
+
+                # Keep the text in a small corner strip rather than on top of the object.
+                label = f"{marker_id}: {object_name}"
+                label_x = 6
+                label_y = 18 + (marker_id - 1) * 18
+                if label_y < h - 6:
+                    cv2.putText(image_np, label, (label_x + 1, label_y + 1),
+                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, shadow, font_thickness + 1)
+                    cv2.putText(image_np, label, (label_x, label_y),
+                                cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, font_thickness)
+
+                enhanced_base64 = self._image_to_base64(Image.fromarray(image_np))
+
+        except Exception as e:
+            print(f"执行marker动作失败 ({object_name}): {str(e)}")
+            traceback.print_exc()
+            enhanced_base64 = node.state['image']
+
+        new_state = {
+            'depth': node.state['depth'] + 1,
+            'image': enhanced_base64,
+            'action_history': node.state['action_history'] + [f"Marker {marker_id} on: {object_name}"],
+            'text': node.state['text'],
+            'image_width': node.state['image_width'],
+            'image_height': node.state['image_height'],
+            'region_coords': node.state['region_coords'],
+            'valid_area_ratio': node.state.get('valid_area_ratio', 1.0)
+        }
+        child = MCTSNode(new_state, parent=node, available_actions=self.actions)
+        child.valid_area_ratio = new_state['valid_area_ratio']
+        return child
+
     # ====================== 动作：向左平移视野 ======================
     def execute_pan_left_action(self, node):
         """将视野向左平移25%，露出右侧新区域"""
@@ -743,6 +818,8 @@ class MCTSQuestionSample(QuestionSample):
             child = self.execute_crop_object_action(node, action)
         elif action.startswith("outline_"):
             child = self.execute_outline_object_action(node, action)
+        elif action.startswith("marker_"):
+            child = self.execute_marker_object_action(node, action)
         else:
             child = self.execute_focus_object_action(node, action)
 
@@ -924,9 +1001,10 @@ class MCTSQuestionSample(QuestionSample):
         self.actions = []
         self.action_objects = {}
         self.action_prompts = {}
+        self.action_marker_ids = {}
         action_mode = getattr(self.args, "mcts_action_mode", "all")
 
-        for obj in detected_objects:
+        for marker_id, obj in enumerate(detected_objects, start=1):
             obj_key = obj.replace(' ', '_')
             if action_mode in ("all", "no_crop"):
                 focus_name = f"focus_{obj_key}"
@@ -945,6 +1023,13 @@ class MCTSQuestionSample(QuestionSample):
                 self.actions.append(outline_name)
                 self.action_objects[outline_name] = obj
                 self.action_prompts[outline_name] = f"Outline on: {obj}"
+
+            if action_mode == "marker_only":
+                marker_name = f"marker_{obj_key}"
+                self.actions.append(marker_name)
+                self.action_objects[marker_name] = obj
+                self.action_marker_ids[marker_name] = marker_id
+                self.action_prompts[marker_name] = f"Marker {marker_id} on: {obj}"
 
         if action_mode in ("all", "no_crop"):
             self.actions.append("zoom_out")
