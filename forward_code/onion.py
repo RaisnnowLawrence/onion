@@ -147,9 +147,24 @@ class onion:
         return any(word in cleaned.lower() for word in cue_words) and len(words) > 3
 
     def _format_direct_verify_prompt(self, cur_caption, question, choice_text, initial_answer):
+        policy_text = {
+            "balanced": "Prefer keeping the initial answer unless the evidence clearly contradicts it.",
+            "keep_stronger": (
+                "Strongly prefer keeping the initial answer. Revise it only when the image or context "
+                "provides clear, specific, and direct contradictory evidence."
+            ),
+            "conflict_only": (
+                "You may revise the initial answer only if Evidence Check is contradicted. "
+                "If the evidence is supported or uncertain, keep the initial answer exactly."
+            ),
+            "revise_freely": (
+                "Use the evidence to choose the best answer, even if that means revising the initial answer."
+            ),
+            "no_fallback": "Prefer keeping the initial answer unless the evidence clearly contradicts it.",
+        }.get(self.args.direct_verify_policy, "Prefer keeping the initial answer unless the evidence clearly contradicts it.")
         return (
             "Please verify an initial visual question answering result using the image and context.\n"
-            "Prefer keeping the initial answer unless the evidence clearly contradicts it.\n"
+            "%s\n"
             "Do not replace the answer with object lists or visual cue lists.\n"
             "The final answer must be a single word or short phrase.\n"
             "===The context you need to refer to:\n"
@@ -161,10 +176,16 @@ class onion:
             "Evidence Check: supported / contradicted / uncertain\n"
             "Evidence: <at most 3 short visual or contextual cues>\n"
             "Final Answer:"
-        ) % (cur_caption, question, choice_text, initial_answer)
+        ) % (policy_text, cur_caption, question, choice_text, initial_answer)
 
     def _extract_direct_verify_answer(self, response, initial_answer):
+        if self.args.direct_verify_policy == "conflict_only":
+            first_lines = "\n".join(str(response).strip().splitlines()[:3]).lower()
+            if "contradicted" not in first_lines:
+                return self._clean_short_answer(initial_answer)
         final_answer = self._extract_structured_cot_answer(response)
+        if self.args.disable_direct_verify_fallback or self.args.direct_verify_policy == "no_fallback":
+            return final_answer
         if self._looks_like_visual_cue_list(final_answer):
             return self._clean_short_answer(initial_answer)
         return final_answer
@@ -1725,6 +1746,11 @@ def parser_args():
     parser.add_argument('--cot_style', type=str, default='step_by_step',
                         choices=['step_by_step', 'compact', 'answer_first', 'direct_verify'],
                         help='prompt style used when --chain_of_thoughts is enabled')
+    parser.add_argument('--direct_verify_policy', type=str, default='balanced',
+                        choices=['balanced', 'keep_stronger', 'conflict_only', 'revise_freely', 'no_fallback'],
+                        help='revision policy used by --cot_style direct_verify')
+    parser.add_argument('--disable_direct_verify_fallback', action='store_true',
+                        help='do not fall back to the initial answer when direct_verify returns a cue-like answer')
     # ----caption策略
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
