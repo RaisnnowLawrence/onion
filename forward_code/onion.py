@@ -109,6 +109,54 @@ class onion:
         lines = [line.strip() for line in response_clean.split('\n') if line.strip()]
         return lines[-1] if lines else response_clean
 
+    def _clean_short_answer(self, answer):
+        import re
+
+        cleaned = str(answer).strip()
+        cleaned = cleaned.split("\n")[0].strip()
+        cleaned = re.sub(r"^(?:final\s+answer|answer)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"^the\s+answer\s+is\s+", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.split(r"\s+(?:because|since|as|therefore)\s+", cleaned, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        cleaned = cleaned.strip(" \t\"'`.,;:!?")
+        return cleaned
+
+    def _extract_structured_cot_answer(self, response):
+        import re
+
+        response_clean = str(response).strip()
+        matches = re.findall(r"(?:final\s+answer|answer)\s*:\s*(.+)", response_clean, flags=re.IGNORECASE)
+        if matches:
+            return self._clean_short_answer(matches[-1])
+
+        lines = [line.strip() for line in response_clean.split("\n") if line.strip()]
+        if not lines:
+            return response_clean
+        return self._clean_short_answer(lines[-1])
+
+    def _format_cot_answer_prompt(self, prompt_before_answer):
+        if self.args.cot_style == "compact":
+            return (
+                "=== Please use compact visual cues, then give the final answer:\n"
+                "Use at most 3 short visual cues. Do not write long reasoning.\n"
+                "The final answer must be a single word or short phrase.\n"
+                "Output exactly in this format:\n"
+                "Visual Cues: <cue1>; <cue2>; <cue3>\n"
+                "Final Answer:"
+            )
+        if self.args.cot_style == "answer_first":
+            return (
+                "=== Please answer first, then add very brief visual cues:\n"
+                "The first line must be the final answer as a single word or short phrase.\n"
+                "Use at most 3 short visual cues after that. Do not write long reasoning.\n"
+                "Output exactly in this format:\n"
+                "Final Answer:"
+            )
+        return (
+            "=== Please think step by step, then provide your final answer:\n"
+            "Let's think step by step.\n"
+            "%s" % (prompt_before_answer)
+        )
+
     def _format_round_state_context(self, state_history, max_rounds=4):
         if not state_history:
             return ""
@@ -912,9 +960,7 @@ class onion:
             prompt += '===The question you need to answer:\n'
             prompt += 'Question: %s%s\n' % (question, choice_text)
             if self.args.chain_of_thoughts:
-                prompt += '=== Please think step by step, then provide your final answer:\n'
-                prompt += "Let's think step by step.\n"
-                prompt += '%s' % (prompt_before_answer)
+                prompt += self._format_cot_answer_prompt(prompt_before_answer)
             else:
                 prompt += '=== Please fill in the answer with a short phrase or a single word:\n'
                 prompt += '%s' % (prompt_before_answer)
@@ -940,7 +986,10 @@ class onion:
                 response = self._call_llm(prompt, image_path=image_path)
 
                 if self.args.chain_of_thoughts:
-                    extracted_answer = self._extract_answer_from_response(response)
+                    if self.args.cot_style in ("compact", "answer_first"):
+                        extracted_answer = self._extract_structured_cot_answer(response)
+                    else:
+                        extracted_answer = self._extract_answer_from_response(response)
                     pred_candidates.append(extracted_answer)
                     filtered_thought, all_thought = response, response
                     if self.args.use_clip_thought_verify:
@@ -1622,6 +1671,9 @@ def parser_args():
     parser.add_argument('--answer_extraction_strategy', type=str, default='current',
                         choices=['current', 'strict_final', 'last_line', 'raw'],
                         help='how to extract a short answer from CoT responses before voting')
+    parser.add_argument('--cot_style', type=str, default='step_by_step',
+                        choices=['step_by_step', 'compact', 'answer_first'],
+                        help='prompt style used when --chain_of_thoughts is enabled')
     # ----caption策略
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
