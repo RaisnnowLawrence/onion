@@ -133,7 +133,48 @@ class onion:
             return response_clean
         return self._clean_short_answer(lines[-1])
 
+    def _looks_like_visual_cue_list(self, answer):
+        cleaned = str(answer).strip()
+        if not cleaned:
+            return True
+        comma_parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+        if len(comma_parts) >= 3:
+            return True
+        words = cleaned.split()
+        if len(words) > 8:
+            return True
+        cue_words = ("visible", "object", "cue", "image", "background", "foreground")
+        return any(word in cleaned.lower() for word in cue_words) and len(words) > 3
+
+    def _format_direct_verify_prompt(self, cur_caption, question, choice_text, initial_answer):
+        return (
+            "Please verify an initial visual question answering result using the image and context.\n"
+            "Prefer keeping the initial answer unless the evidence clearly contradicts it.\n"
+            "Do not replace the answer with object lists or visual cue lists.\n"
+            "The final answer must be a single word or short phrase.\n"
+            "===The context you need to refer to:\n"
+            "Brief Context: %s\n"
+            "===The question you need to answer:\n"
+            "Question: %s%s\n"
+            "Initial Answer: %s\n"
+            "Output exactly in this format:\n"
+            "Evidence Check: supported / contradicted / uncertain\n"
+            "Evidence: <at most 3 short visual or contextual cues>\n"
+            "Final Answer:"
+        ) % (cur_caption, question, choice_text, initial_answer)
+
+    def _extract_direct_verify_answer(self, response, initial_answer):
+        final_answer = self._extract_structured_cot_answer(response)
+        if self._looks_like_visual_cue_list(final_answer):
+            return self._clean_short_answer(initial_answer)
+        return final_answer
+
     def _format_cot_answer_prompt(self, prompt_before_answer):
+        if self.args.cot_style == "direct_verify":
+            return (
+                "=== Please answer directly with a single word or short phrase:\n"
+                "%s" % (prompt_before_answer)
+            )
         if self.args.cot_style == "compact":
             return (
                 "=== Please use compact visual cues, then give the final answer:\n"
@@ -986,7 +1027,17 @@ class onion:
                 response = self._call_llm(prompt, image_path=image_path)
 
                 if self.args.chain_of_thoughts:
-                    if self.args.cot_style in ("compact", "answer_first"):
+                    if self.args.cot_style == "direct_verify":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        verify_prompt = self._format_direct_verify_prompt(cur_caption, question, choice_text, initial_answer)
+                        verify_response = self._call_llm(verify_prompt, image_path=image_path)
+                        extracted_answer = self._extract_direct_verify_answer(verify_response, initial_answer)
+                        response = (
+                            "Initial Answer: %s\n"
+                            "Verification Prompt:\n%s\n"
+                            "Verification Response:\n%s"
+                        ) % (initial_answer, verify_prompt, verify_response)
+                    elif self.args.cot_style in ("compact", "answer_first"):
                         extracted_answer = self._extract_structured_cot_answer(response)
                     else:
                         extracted_answer = self._extract_answer_from_response(response)
@@ -1672,7 +1723,7 @@ def parser_args():
                         choices=['current', 'strict_final', 'last_line', 'raw'],
                         help='how to extract a short answer from CoT responses before voting')
     parser.add_argument('--cot_style', type=str, default='step_by_step',
-                        choices=['step_by_step', 'compact', 'answer_first'],
+                        choices=['step_by_step', 'compact', 'answer_first', 'direct_verify'],
                         help='prompt style used when --chain_of_thoughts is enabled')
     # ----caption策略
     parser.add_argument('--random_caption', action='store_true')
