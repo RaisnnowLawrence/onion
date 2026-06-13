@@ -182,6 +182,8 @@ class onion:
         scope = getattr(self.args, "reviewer_evidence_scope", "all")
         if scope == "all":
             return True
+        if scope == "selective":
+            return kind in getattr(self, "_current_selective_evidence_kinds", {"caption"})
         if scope == "caption_object":
             return kind in ("caption", "object")
         if scope == "caption_only":
@@ -195,6 +197,33 @@ class onion:
         if scope == "no_objects":
             return kind != "object"
         return True
+
+    def _selective_reviewer_evidence_kinds(self, question):
+        question_l = str(question).lower()
+        kinds = {"caption"}
+
+        visual_detail_keywords = (
+            "how many", "number", "count", "what color", "which color", "color",
+            "where", "which side", "left", "right", "front", "behind", "next to",
+            "sign", "text", "read", "says", "letter", "logo"
+        )
+        local_caption_keywords = (
+            "wearing", "holding", "carrying", "mouth", "head", "hand", "face",
+            "what type", "what kind", "what object", "which object", "animal",
+            "person", "device", "appliance", "made of", "doing"
+        )
+        knowledge_keywords = (
+            "used for", "use for", "why", "purpose", "probably", "celebrated",
+            "celebrating", "event", "sport", "game", "weather", "season"
+        )
+
+        if any(keyword in question_l for keyword in visual_detail_keywords):
+            kinds.add("image")
+        if any(keyword in question_l for keyword in local_caption_keywords):
+            kinds.add("caption_enhance")
+        if any(keyword in question_l for keyword in knowledge_keywords):
+            kinds.add("knowledge")
+        return kinds
 
     def _build_reviewer_evidence(self, base_context, selected_objects, regional_context, ocr_context,
                                  enhance_caption, enhance_knowledge, enhance_image_path,
@@ -254,6 +283,7 @@ class onion:
             "Review an initial visual question answering result. The enhancement modules are evidence providers, "
             "not answer generators.\n"
             "%s\n"
+            "Use only the provided image and the explicit evidence below. Do not invent visual details that are not visible or listed.\n"
             "Do not replace the answer with an object list, caption, or visual cue list.\n"
             "The final answer must be a single word or short phrase.\n"
             "=== Question:\n"
@@ -958,20 +988,37 @@ class onion:
         enhance_image_path = None
         enhance_caption = None
         enhance_knowledge = None
+        selective_evidence_kinds = {"caption"}
+        if self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective":
+            selective_evidence_kinds = self._selective_reviewer_evidence_kinds(question)
+            self._current_selective_evidence_kinds = selective_evidence_kinds
+            print('-----selective_reviewer_evidence-----触发证据-----+++++-----beg')
+            print('selective_evidence_kinds:', sorted(selective_evidence_kinds))
+            print('-----selective_reviewer_evidence-----触发证据-----+++++-----end')
+            print()
+
+        effective_use_image_enhance = self.args.use_image_enhance
+        effective_use_caption_enhance = self.args.use_caption_enhance
+        effective_use_knowledge_enhance = self.args.use_knowledge_enhance
+        if self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective":
+            effective_use_image_enhance = self.args.use_image_enhance and "image" in selective_evidence_kinds
+            effective_use_caption_enhance = "caption_enhance" in selective_evidence_kinds
+            effective_use_knowledge_enhance = "knowledge" in selective_evidence_kinds
+        selective_mode = self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective"
         
         # ========== 三个核心增强模块（由args控制开关） ==========
-        if self.args.use_image_enhance and onion_instruction[0] == 'image':
+        if effective_use_image_enhance and onion_instruction[0] == 'image':
             enhance_image_path = self.enhance_image_object(data_row, onion_instruction[1], attr_list)
             print('-----enhance_image-----MCTS增强图像已生成-----')
 
-        if self.args.use_caption_enhance and onion_instruction[0] == 'caption':
+        if effective_use_caption_enhance and (onion_instruction[0] == 'caption' or selective_mode):
             enhance_caption = self.enhance_caption_object(data_row, onion_instruction[1], attr_list)
             print('-----enhance_caption-----强化的针对目标描述-----+++++-----beg')
             print('enhance_caption:', enhance_caption)
             print('-----enhance_caption-----强化的针对目标描述-----+++++-----end')
             print()
 
-        if self.args.use_knowledge_enhance and onion_instruction[0] == 'knowledge':
+        if effective_use_knowledge_enhance and (onion_instruction[0] == 'knowledge' or selective_mode):
             enhance_knowledge = self.enhance_knowledge_object(data_row, onion_instruction[1], attr_list)
             print('-----enhance_knowledge-----强化的针对目标知识-----+++++-----beg')
             print('enhance_knowledge:', enhance_knowledge)
@@ -980,9 +1027,9 @@ class onion:
 
         print('-----onion_instruction-----类别输出指示-----+++++-----beg')
         print('onion_instruction:', onion_instruction)
-        if self.args.use_caption_enhance and onion_instruction[0] == 'caption':
+        if effective_use_caption_enhance and (onion_instruction[0] == 'caption' or selective_mode):
             print('enhance_caption:', enhance_caption)
-        if self.args.use_knowledge_enhance and onion_instruction[0] == 'knowledge':
+        if effective_use_knowledge_enhance and (onion_instruction[0] == 'knowledge' or selective_mode):
             print('enhance_knowledge:', enhance_knowledge)
         print('-----onion_instruction-----类别输出指示-----+++++-----end')
         print()
@@ -1874,7 +1921,7 @@ def parser_args():
                         help='do not fall back to the initial answer when direct_verify returns a cue-like answer')
     parser.add_argument('--reviewer_evidence_scope', type=str, default='all',
                         choices=['all', 'caption_object', 'caption_only', 'object_only', 'enhance_only',
-                                 'no_caption', 'no_objects'],
+                                 'no_caption', 'no_objects', 'selective'],
                         help='which evidence providers are visible to --cot_style reviewer_evidence')
     parser.add_argument('--reviewer_disable_enhanced_image', action='store_true',
                         help='for --cot_style reviewer_evidence, keep reviewer on the original image even when MCTS creates an enhanced image')
