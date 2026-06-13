@@ -178,6 +178,95 @@ class onion:
             "Final Answer:"
         ) % (policy_text, cur_caption, question, choice_text, initial_answer)
 
+    def _evidence_scope_enabled(self, kind):
+        scope = getattr(self.args, "reviewer_evidence_scope", "all")
+        if scope == "all":
+            return True
+        if scope == "caption_object":
+            return kind in ("caption", "object")
+        if scope == "caption_only":
+            return kind == "caption"
+        if scope == "object_only":
+            return kind == "object"
+        if scope == "enhance_only":
+            return kind in ("image", "caption_enhance", "knowledge")
+        if scope == "no_caption":
+            return kind != "caption"
+        if scope == "no_objects":
+            return kind != "object"
+        return True
+
+    def _build_reviewer_evidence(self, base_context, selected_objects, regional_context, ocr_context,
+                                 enhance_caption, enhance_knowledge, enhance_image_path,
+                                 qwen_global_caption="", qwen_local_caption=""):
+        evidence_lines = []
+
+        if self._evidence_scope_enabled("caption") and base_context:
+            evidence_lines.append("Caption evidence: %s" % self._truncate_text(base_context, 700))
+
+        if self._evidence_scope_enabled("object") and selected_objects:
+            evidence_lines.append("Selected object evidence: %s" % ", ".join(selected_objects))
+
+        if self._evidence_scope_enabled("object") and regional_context:
+            evidence_lines.append("Regional object evidence: %s" % self._truncate_text(regional_context, 700))
+
+        if self._evidence_scope_enabled("caption_enhance") and enhance_caption:
+            evidence_lines.append("Targeted caption evidence: %s" % self._truncate_text(enhance_caption, 700))
+
+        if self._evidence_scope_enabled("knowledge") and enhance_knowledge:
+            evidence_lines.append("Knowledge evidence: %s" % self._truncate_text(enhance_knowledge, 700))
+
+        if self._evidence_scope_enabled("caption") and qwen_global_caption:
+            evidence_lines.append("Qwen global caption evidence: %s" % self._truncate_text(qwen_global_caption, 500))
+
+        if self._evidence_scope_enabled("caption") and qwen_local_caption:
+            evidence_lines.append("Qwen local caption evidence: %s" % self._truncate_text(qwen_local_caption, 500))
+
+        if self._evidence_scope_enabled("object") and ocr_context:
+            evidence_lines.append("OCR evidence: %s" % self._truncate_text(ocr_context, 500))
+
+        if self._evidence_scope_enabled("image") and enhance_image_path:
+            evidence_lines.append(
+                "Enhanced image evidence: an auxiliary marked/outlined image view is provided to inspect local visual details."
+            )
+
+        if not evidence_lines:
+            return "No extra evidence is available. Keep the initial answer unless the original image clearly contradicts it."
+
+        return "\n".join("- " + line for line in evidence_lines)
+
+    def _format_reviewer_evidence_prompt(self, question, choice_text, initial_answer, evidence_text):
+        policy_text = {
+            "balanced": "Prefer keeping the initial answer unless the evidence clearly contradicts it.",
+            "keep_stronger": (
+                "Strongly prefer keeping the initial answer. Revise it only when the evidence is visual, specific, "
+                "and directly contradicts the initial answer."
+            ),
+            "conflict_only": (
+                "You are a conservative answer reviewer. You may revise the initial answer only if Evidence Check "
+                "is contradicted. If the evidence is supported or uncertain, keep the initial answer exactly."
+            ),
+            "revise_freely": "Use the evidence to choose the best answer, even if that revises the initial answer.",
+            "no_fallback": "Prefer keeping the initial answer unless the evidence clearly contradicts it.",
+        }.get(self.args.direct_verify_policy, "Prefer keeping the initial answer unless the evidence clearly contradicts it.")
+
+        return (
+            "Review an initial visual question answering result. The enhancement modules are evidence providers, "
+            "not answer generators.\n"
+            "%s\n"
+            "Do not replace the answer with an object list, caption, or visual cue list.\n"
+            "The final answer must be a single word or short phrase.\n"
+            "=== Question:\n"
+            "Question: %s%s\n"
+            "Initial Answer: %s\n"
+            "=== Evidence from enhancement modules:\n"
+            "%s\n"
+            "Output exactly in this format:\n"
+            "Evidence Check: supported / contradicted / uncertain\n"
+            "Evidence: <at most 3 short evidence points>\n"
+            "Final Answer:"
+        ) % (policy_text, question, choice_text, initial_answer, evidence_text)
+
     def _extract_direct_verify_answer(self, response, initial_answer):
         if self.args.direct_verify_policy == "conflict_only":
             first_lines = "\n".join(str(response).strip().splitlines()[:3]).lower()
@@ -191,7 +280,7 @@ class onion:
         return final_answer
 
     def _format_cot_answer_prompt(self, prompt_before_answer):
-        if self.args.cot_style == "direct_verify":
+        if self.args.cot_style in ("direct_verify", "reviewer_evidence"):
             return (
                 "=== Please answer directly with a single word or short phrase:\n"
                 "%s" % (prompt_before_answer)
@@ -924,6 +1013,7 @@ class onion:
                 cur_caption = "Selected visual objects: " + ", ".join(object_names) if object_names else ""
             else:
                 cur_caption = caption
+            direct_answer_context = cur_caption
 
             # 获取上下文的训练示例
             for ni in range(self.args.n_shot):
@@ -1009,10 +1099,11 @@ class onion:
                 cur_caption += '\n' + enhance_caption
             if self.args.use_knowledge_enhance and enhance_knowledge:
                 cur_caption += '\n' + enhance_knowledge
+            prompt_context = direct_answer_context if self.args.cot_style == "reviewer_evidence" else cur_caption
 
             # 上下文参考
             prompt += '===The context you need to refer to:\n'
-            prompt += 'Brief Context: %s\n' % cur_caption
+            prompt += 'Brief Context: %s\n' % prompt_context
             # # Detailed Context：优先使用caption增强结果，否则使用Qwen精简描述
             # detailed_context = enhance_caption if (self.args.use_caption_enhance and enhance_caption) else simplified_qwen_caption
             # prompt += 'Detailed Context: %s\n===\n' % detailed_context
@@ -1040,24 +1131,54 @@ class onion:
             if 'qwen' in self.args.engine:
 
                 # 增强图像判断
-                image_path = enhance_image_path if enhance_image_path else image_path
+                answer_image_path = image_path
+                if self.args.cot_style != "reviewer_evidence" and enhance_image_path:
+                    answer_image_path = enhance_image_path
+                reviewer_image_path = image_path
+                if enhance_image_path and not self.args.reviewer_disable_enhanced_image:
+                    reviewer_image_path = enhance_image_path
 
                 # # 长上下文一体对话模块修改
                 # response, self.messages = self._call_llm(prompt, image_path=image_path, history=self.messages, return_history=True)
                 # 获取响应
-                response = self._call_llm(prompt, image_path=image_path)
+                response = self._call_llm(prompt, image_path=answer_image_path)
 
                 if self.args.chain_of_thoughts:
                     if self.args.cot_style == "direct_verify":
                         initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
                         verify_prompt = self._format_direct_verify_prompt(cur_caption, question, choice_text, initial_answer)
-                        verify_response = self._call_llm(verify_prompt, image_path=image_path)
+                        verify_response = self._call_llm(verify_prompt, image_path=answer_image_path)
                         extracted_answer = self._extract_direct_verify_answer(verify_response, initial_answer)
                         response = (
                             "Initial Answer: %s\n"
                             "Verification Prompt:\n%s\n"
                             "Verification Response:\n%s"
                         ) % (initial_answer, verify_prompt, verify_response)
+                    elif self.args.cot_style == "reviewer_evidence":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        selected_objects = onion_instruction[1] if len(onion_instruction) > 1 else []
+                        evidence_text = self._build_reviewer_evidence(
+                            base_context=caption,
+                            selected_objects=selected_objects,
+                            regional_context=regional_context if self.args.use_all_regional_captions else "",
+                            ocr_context=ocr_context if self.args.use_ocr_context else "",
+                            enhance_caption=enhance_caption,
+                            enhance_knowledge=enhance_knowledge,
+                            enhance_image_path=enhance_image_path,
+                            qwen_global_caption=qwen_global_caption if self.args.use_qwen_blip2_caption else "",
+                            qwen_local_caption=qwen_local_caption if self.args.use_qwen_blip2_caption else "",
+                        )
+                        verify_prompt = self._format_reviewer_evidence_prompt(
+                            question, choice_text, initial_answer, evidence_text
+                        )
+                        verify_response = self._call_llm(verify_prompt, image_path=reviewer_image_path)
+                        extracted_answer = self._extract_direct_verify_answer(verify_response, initial_answer)
+                        response = (
+                            "Initial Answer: %s\n"
+                            "Reviewer Evidence:\n%s\n"
+                            "Reviewer Prompt:\n%s\n"
+                            "Reviewer Response:\n%s"
+                        ) % (initial_answer, evidence_text, verify_prompt, verify_response)
                     elif self.args.cot_style in ("compact", "answer_first"):
                         extracted_answer = self._extract_structured_cot_answer(response)
                     else:
@@ -1744,13 +1865,19 @@ def parser_args():
                         choices=['current', 'strict_final', 'last_line', 'raw'],
                         help='how to extract a short answer from CoT responses before voting')
     parser.add_argument('--cot_style', type=str, default='step_by_step',
-                        choices=['step_by_step', 'compact', 'answer_first', 'direct_verify'],
+                        choices=['step_by_step', 'compact', 'answer_first', 'direct_verify', 'reviewer_evidence'],
                         help='prompt style used when --chain_of_thoughts is enabled')
     parser.add_argument('--direct_verify_policy', type=str, default='balanced',
                         choices=['balanced', 'keep_stronger', 'conflict_only', 'revise_freely', 'no_fallback'],
                         help='revision policy used by --cot_style direct_verify')
     parser.add_argument('--disable_direct_verify_fallback', action='store_true',
                         help='do not fall back to the initial answer when direct_verify returns a cue-like answer')
+    parser.add_argument('--reviewer_evidence_scope', type=str, default='all',
+                        choices=['all', 'caption_object', 'caption_only', 'object_only', 'enhance_only',
+                                 'no_caption', 'no_objects'],
+                        help='which evidence providers are visible to --cot_style reviewer_evidence')
+    parser.add_argument('--reviewer_disable_enhanced_image', action='store_true',
+                        help='for --cot_style reviewer_evidence, keep reviewer on the original image even when MCTS creates an enhanced image')
     # ----caption策略
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
