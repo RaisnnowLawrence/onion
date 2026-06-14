@@ -307,6 +307,42 @@ class onion:
             "Final Answer:"
         ) % (policy_text, question, choice_text, initial_answer, evidence_text)
 
+    def _format_reflective_rationale_prompt(self, cur_caption, question, choice_text, current_answer):
+        return (
+            "The model has already chosen an answer for a visual question. Do not change the answer in this step.\n"
+            "Your task is only to write the smallest necessary visual evidence that supports or fails to support it.\n"
+            "Use the image and the brief context only. Do not invent details.\n"
+            "Write at most 2 short evidence points.\n"
+            "=== Brief Context:\n"
+            "%s\n"
+            "=== Question:\n"
+            "Question: %s%s\n"
+            "Current Answer: %s\n"
+            "Output exactly in this format:\n"
+            "Evidence:\n"
+            "1. <short visual evidence>\n"
+            "2. <short visual evidence>"
+        ) % (cur_caption, question, choice_text, current_answer)
+
+    def _format_reflective_review_prompt(self, cur_caption, question, choice_text, current_answer, rationale):
+        return (
+            "Review the current answer conservatively. The evidence step is a check, not a chance to freely reason.\n"
+            "Keep the current answer if the evidence supports it or is uncertain.\n"
+            "Revise the answer only when the image/context clearly contradicts it.\n"
+            "The final answer must be a single word or short phrase.\n"
+            "=== Brief Context:\n"
+            "%s\n"
+            "=== Question:\n"
+            "Question: %s%s\n"
+            "Current Answer: %s\n"
+            "=== Evidence Notes:\n"
+            "%s\n"
+            "Output exactly in this format:\n"
+            "Evidence Check: supported / contradicted / uncertain\n"
+            "Evidence: <at most 2 short points>\n"
+            "Final Answer:"
+        ) % (cur_caption, question, choice_text, current_answer, rationale)
+
     def _extract_direct_verify_answer(self, response, initial_answer):
         if self.args.direct_verify_policy == "conflict_only":
             first_lines = "\n".join(str(response).strip().splitlines()[:3]).lower()
@@ -324,6 +360,12 @@ class onion:
             return (
                 "=== Please answer directly with a single word or short phrase:\n"
                 "%s" % (prompt_before_answer)
+            )
+        if self.args.cot_style == "reflective_answer_first":
+            return (
+                "=== Please answer first with a single word or short phrase:\n"
+                "Do not explain yet. The first response should contain only the answer.\n"
+                "Answer:"
             )
         if self.args.cot_style == "compact":
             return (
@@ -1258,6 +1300,31 @@ class onion:
                             "Reviewer Prompt:\n%s\n"
                             "Reviewer Response:\n%s"
                         ) % (initial_answer, evidence_text, verify_prompt, verify_response)
+                    elif self.args.cot_style == "reflective_answer_first":
+                        current_answer = self._extract_first_answer_line(response)
+                        transcript = ["Round 1 Answer: %s" % current_answer]
+                        reflect_rounds = max(1, self.args.reflect_rounds)
+                        reflect_cycles = max(0, (reflect_rounds - 1) // 2)
+                        for cycle in range(reflect_cycles):
+                            rationale_prompt = self._format_reflective_rationale_prompt(
+                                cur_caption, question, choice_text, current_answer
+                            )
+                            rationale_response = self._call_llm(rationale_prompt, image_path=answer_image_path)
+                            review_prompt = self._format_reflective_review_prompt(
+                                cur_caption, question, choice_text, current_answer, rationale_response
+                            )
+                            review_response = self._call_llm(review_prompt, image_path=answer_image_path)
+                            revised_answer = self._extract_direct_verify_answer(review_response, current_answer)
+                            transcript.extend([
+                                "Round %d Evidence Prompt:\n%s" % (2 + cycle * 2, rationale_prompt),
+                                "Round %d Evidence Response:\n%s" % (2 + cycle * 2, rationale_response),
+                                "Round %d Review Prompt:\n%s" % (3 + cycle * 2, review_prompt),
+                                "Round %d Review Response:\n%s" % (3 + cycle * 2, review_response),
+                                "Round %d Answer: %s" % (3 + cycle * 2, revised_answer),
+                            ])
+                            current_answer = revised_answer
+                        extracted_answer = current_answer
+                        response = "\n".join(transcript)
                     elif self.args.cot_style == "answer_first_locked":
                         extracted_answer = self._extract_first_answer_line(response)
                     elif self.args.cot_style in ("compact", "answer_first", "visual_facts"):
@@ -1947,8 +2014,11 @@ def parser_args():
                         help='how to extract a short answer from CoT responses before voting')
     parser.add_argument('--cot_style', type=str, default='step_by_step',
                         choices=['step_by_step', 'compact', 'answer_first', 'answer_first_locked',
-                                 'visual_facts', 'direct_verify', 'reviewer_evidence'],
+                                 'visual_facts', 'direct_verify', 'reviewer_evidence',
+                                 'reflective_answer_first'],
                         help='prompt style used when --chain_of_thoughts is enabled')
+    parser.add_argument('--reflect_rounds', type=int, default=3,
+                        help='number of answer/evidence/review stages for --cot_style reflective_answer_first')
     parser.add_argument('--direct_verify_policy', type=str, default='balanced',
                         choices=['balanced', 'keep_stronger', 'conflict_only', 'revise_freely', 'no_fallback'],
                         help='revision policy used by --cot_style direct_verify')
