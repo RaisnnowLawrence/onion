@@ -1736,6 +1736,7 @@ class onion:
         best_image = mcts_sample._base64_to_image(best_image_b64)
         image_filename = os.path.basename(image_path)
         cache_path = os.path.join(self.args.cache_path, f"mcts_{image_filename}")
+        os.makedirs(self.args.cache_path, exist_ok=True)
         best_image.save(cache_path)
 
         return cache_path
