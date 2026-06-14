@@ -308,10 +308,16 @@ class onion:
         ) % (policy_text, question, choice_text, initial_answer, evidence_text)
 
     def _format_reflective_rationale_prompt(self, cur_caption, question, choice_text, current_answer):
+        evidence_rule = (
+            "Use only details directly visible in the image. Do not mention common usage, typical purpose, "
+            "world knowledge, or what objects are usually for.\n"
+            if self.args.reflect_evidence_mode == "visible_only" else ""
+        )
         return (
             "The model has already chosen an answer for a visual question. Do not change the answer in this step.\n"
             "Your task is only to write the smallest necessary visual evidence that supports or fails to support it.\n"
             "Use the image and the brief context only. Do not invent details.\n"
+            "%s"
             "Write at most 2 short evidence points.\n"
             "=== Brief Context:\n"
             "%s\n"
@@ -322,9 +328,26 @@ class onion:
             "Evidence:\n"
             "1. <short visual evidence>\n"
             "2. <short visual evidence>"
-        ) % (cur_caption, question, choice_text, current_answer)
+        ) % (evidence_rule, cur_caption, question, choice_text, current_answer)
 
     def _format_reflective_review_prompt(self, cur_caption, question, choice_text, current_answer, rationale):
+        if self.args.reflect_review_format == "keep_revise":
+            return (
+                "Review the current answer conservatively. The evidence step is a check, not a chance to freely reason.\n"
+                "Choose keep unless the image/context clearly contradicts the current answer.\n"
+                "Only choose revise when the contradiction is direct and the corrected answer is a single word or short phrase.\n"
+                "=== Brief Context:\n"
+                "%s\n"
+                "=== Question:\n"
+                "Question: %s%s\n"
+                "Current Answer: %s\n"
+                "=== Evidence Notes:\n"
+                "%s\n"
+                "Output exactly in this format:\n"
+                "Evidence Check: supported / contradicted / uncertain\n"
+                "Decision: keep / revise\n"
+                "Corrected Answer:"
+            ) % (cur_caption, question, choice_text, current_answer, rationale)
         return (
             "Review the current answer conservatively. The evidence step is a check, not a chance to freely reason.\n"
             "Keep the current answer if the evidence supports it or is uncertain.\n"
@@ -343,6 +366,56 @@ class onion:
             "Final Answer:"
         ) % (cur_caption, question, choice_text, current_answer, rationale)
 
+    def _extract_reflective_review_answer(self, response, initial_answer):
+        if self.args.reflect_review_format != "keep_revise":
+            return self._extract_direct_verify_answer(response, initial_answer)
+
+        import re
+
+        response_clean = str(response).strip()
+        first_lines = "\n".join(response_clean.splitlines()[:4]).lower()
+        if "contradicted" not in first_lines or "decision: revise" not in first_lines:
+            return self._clean_short_answer(initial_answer)
+
+        matches = re.findall(r"corrected\s+answer\s*:\s*(.+)", response_clean, flags=re.IGNORECASE)
+        if not matches:
+            return self._clean_short_answer(initial_answer)
+        corrected = self._clean_short_answer(matches[-1])
+        if self._looks_like_visual_cue_list(corrected):
+            return self._clean_short_answer(initial_answer)
+        return corrected
+
+    def _extract_reflective_confidence(self, response):
+        import re
+
+        response_clean = str(response).strip()
+        match = re.search(r"(?:^|\n)\s*confidence\s*:\s*(high|medium|low)", response_clean, flags=re.IGNORECASE)
+        return match.group(1).lower() if match else ""
+
+    def _is_high_risk_question(self, question):
+        text = str(question).lower()
+        high_risk_cues = (
+            "how many", "number", "count", "color", "colour", "text", "word", "letter", "sign",
+            "read", "say", "left", "right", "behind", "front", "next to", "where", "wearing",
+            "holding", "doing", "mouth", "hand", "what is in", "what are in"
+        )
+        return any(cue in text for cue in high_risk_cues)
+
+    def _should_run_reflective_review(self, question, response, current_answer):
+        trigger = self.args.reflect_trigger_mode
+        if trigger == "always":
+            return True
+        high_risk = self._is_high_risk_question(question)
+        confidence = self._extract_reflective_confidence(response)
+        low_confidence = confidence in ("low", "medium") or self._looks_like_visual_cue_list(current_answer)
+        if trigger == "high_risk":
+            return high_risk
+        if trigger == "low_confidence":
+            return low_confidence
+        if trigger == "high_risk_or_low_confidence":
+            return high_risk or low_confidence
+        return True
+
     def _extract_direct_verify_answer(self, response, initial_answer):
         if self.args.direct_verify_policy == "conflict_only":
             first_lines = "\n".join(str(response).strip().splitlines()[:3]).lower()
@@ -360,6 +433,14 @@ class onion:
             return (
                 "=== Please answer directly with a single word or short phrase:\n"
                 "%s" % (prompt_before_answer)
+            )
+        if self.args.cot_style == "adaptive_reflective_answer_first":
+            return (
+                "=== Please answer first with a single word or short phrase:\n"
+                "Do not explain yet. Also give a coarse confidence label.\n"
+                "Output exactly in this format:\n"
+                "Answer: <short answer>\n"
+                "Confidence: high / medium / low"
             )
         if self.args.cot_style == "reflective_answer_first":
             return (
@@ -1300,21 +1381,47 @@ class onion:
                             "Reviewer Prompt:\n%s\n"
                             "Reviewer Response:\n%s"
                         ) % (initial_answer, evidence_text, verify_prompt, verify_response)
-                    elif self.args.cot_style == "reflective_answer_first":
-                        current_answer = self._extract_first_answer_line(response)
+                    elif self.args.cot_style in ("reflective_answer_first", "adaptive_reflective_answer_first"):
+                        initial_responses = [response]
+                        initial_answers = [self._extract_first_answer_line(response)]
+                        for ensemble_idx in range(1, max(1, self.args.reflect_initial_ensemble)):
+                            extra_response = self._call_llm(prompt, image_path=answer_image_path)
+                            initial_responses.append(extra_response)
+                            initial_answers.append(self._extract_first_answer_line(extra_response))
+
+                        if len(initial_answers) > 1:
+                            normalized_counts = {}
+                            normalized_to_answer = {}
+                            for ans in initial_answers:
+                                normalized = process_answer(ans)
+                                normalized_counts[normalized] = normalized_counts.get(normalized, 0) + 1
+                                normalized_to_answer.setdefault(normalized, ans)
+                            best_norm = max(normalized_counts, key=normalized_counts.get)
+                            current_answer = normalized_to_answer[best_norm]
+                        else:
+                            current_answer = initial_answers[0]
+
                         transcript = ["Round 1 Answer: %s" % current_answer]
+                        if len(initial_responses) > 1:
+                            transcript.append("Initial Ensemble Responses:\n%s" % "\n---\n".join(initial_responses))
+                            transcript.append("Initial Ensemble Answers: %s" % initial_answers)
                         reflect_rounds = max(1, self.args.reflect_rounds)
                         reflect_cycles = max(0, (reflect_rounds - 1) // 2)
+                        should_review = self._should_run_reflective_review(question, response, current_answer)
+                        if not should_review:
+                            transcript.append("Reflective Review: skipped by trigger mode %s" % self.args.reflect_trigger_mode)
+                            reflect_cycles = 0
+                        review_context = "" if self.args.reflect_review_context == "empty" else cur_caption
                         for cycle in range(reflect_cycles):
                             rationale_prompt = self._format_reflective_rationale_prompt(
-                                cur_caption, question, choice_text, current_answer
+                                review_context, question, choice_text, current_answer
                             )
                             rationale_response = self._call_llm(rationale_prompt, image_path=answer_image_path)
                             review_prompt = self._format_reflective_review_prompt(
-                                cur_caption, question, choice_text, current_answer, rationale_response
+                                review_context, question, choice_text, current_answer, rationale_response
                             )
                             review_response = self._call_llm(review_prompt, image_path=answer_image_path)
-                            revised_answer = self._extract_direct_verify_answer(review_response, current_answer)
+                            revised_answer = self._extract_reflective_review_answer(review_response, current_answer)
                             transcript.extend([
                                 "Round %d Evidence Prompt:\n%s" % (2 + cycle * 2, rationale_prompt),
                                 "Round %d Evidence Response:\n%s" % (2 + cycle * 2, rationale_response),
@@ -2015,10 +2122,24 @@ def parser_args():
     parser.add_argument('--cot_style', type=str, default='step_by_step',
                         choices=['step_by_step', 'compact', 'answer_first', 'answer_first_locked',
                                  'visual_facts', 'direct_verify', 'reviewer_evidence',
-                                 'reflective_answer_first'],
+                                 'reflective_answer_first', 'adaptive_reflective_answer_first'],
                         help='prompt style used when --chain_of_thoughts is enabled')
     parser.add_argument('--reflect_rounds', type=int, default=3,
                         help='number of answer/evidence/review stages for --cot_style reflective_answer_first')
+    parser.add_argument('--reflect_trigger_mode', type=str, default='always',
+                        choices=['always', 'high_risk', 'low_confidence', 'high_risk_or_low_confidence'],
+                        help='when adaptive_reflective_answer_first should run evidence/review')
+    parser.add_argument('--reflect_evidence_mode', type=str, default='default',
+                        choices=['default', 'visible_only'],
+                        help='controls whether reflective evidence can include commonsense/typical-use statements')
+    parser.add_argument('--reflect_review_format', type=str, default='final_answer',
+                        choices=['final_answer', 'keep_revise'],
+                        help='controls reflective reviewer output format and extraction')
+    parser.add_argument('--reflect_review_context', type=str, default='same',
+                        choices=['same', 'empty'],
+                        help='whether reflective evidence/review sees the same context as round 1 or no text context')
+    parser.add_argument('--reflect_initial_ensemble', type=int, default=1,
+                        help='number of direct first-answer calls before a single reflective review')
     parser.add_argument('--direct_verify_policy', type=str, default='balanced',
                         choices=['balanced', 'keep_stronger', 'conflict_only', 'revise_freely', 'no_fallback'],
                         help='revision policy used by --cot_style direct_verify')
