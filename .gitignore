@@ -23,3 +23,7 @@ format_samples/
 *.pth
 
 .DS_Store
+
+# Full local experiment archive copied from the workspace. Keep it in the repo
+# directory for convenience, but do not push multi-GB outputs/logs to GitHub.
+local_artifacts/
