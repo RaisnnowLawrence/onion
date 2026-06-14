@@ -133,6 +133,16 @@ class onion:
             return response_clean
         return self._clean_short_answer(lines[-1])
 
+    def _extract_first_answer_line(self, response):
+        import re
+
+        response_clean = str(response).strip()
+        match = re.search(r"(?:^|\n)\s*answer\s*:\s*(.+)", response_clean, flags=re.IGNORECASE)
+        if match:
+            return self._clean_short_answer(match.group(1))
+        lines = [line.strip() for line in response_clean.split("\n") if line.strip()]
+        return self._clean_short_answer(lines[0]) if lines else response_clean
+
     def _looks_like_visual_cue_list(self, answer):
         cleaned = str(answer).strip()
         if not cleaned:
@@ -331,6 +341,28 @@ class onion:
                 "Use at most 3 short visual cues after that. Do not write long reasoning.\n"
                 "Output exactly in this format:\n"
                 "Final Answer:"
+            )
+        if self.args.cot_style == "answer_first_locked":
+            return (
+                "=== Please answer first, then give very brief visual reasons:\n"
+                "Give the answer before any reasoning. Do not revise it after giving reasons.\n"
+                "The answer must be a single word or short phrase.\n"
+                "Output exactly in this format:\n"
+                "Answer: <short answer>\n"
+                "Reasons:\n"
+                "1. <visible reason>\n"
+                "2. <visible reason>"
+            )
+        if self.args.cot_style == "visual_facts":
+            return (
+                "=== Please ground the answer with minimal visible facts:\n"
+                "List at most 2 visible facts from the image that are directly relevant to the question.\n"
+                "Do not use long reasoning. Then answer with a single word or short phrase.\n"
+                "Output exactly in this format:\n"
+                "Visible Facts:\n"
+                "1. <directly relevant visible fact>\n"
+                "2. <directly relevant visible fact>\n"
+                "Answer:"
             )
         return (
             "=== Please think step by step, then provide your final answer:\n"
@@ -1226,7 +1258,9 @@ class onion:
                             "Reviewer Prompt:\n%s\n"
                             "Reviewer Response:\n%s"
                         ) % (initial_answer, evidence_text, verify_prompt, verify_response)
-                    elif self.args.cot_style in ("compact", "answer_first"):
+                    elif self.args.cot_style == "answer_first_locked":
+                        extracted_answer = self._extract_first_answer_line(response)
+                    elif self.args.cot_style in ("compact", "answer_first", "visual_facts"):
                         extracted_answer = self._extract_structured_cot_answer(response)
                     else:
                         extracted_answer = self._extract_answer_from_response(response)
@@ -1912,7 +1946,8 @@ def parser_args():
                         choices=['current', 'strict_final', 'last_line', 'raw'],
                         help='how to extract a short answer from CoT responses before voting')
     parser.add_argument('--cot_style', type=str, default='step_by_step',
-                        choices=['step_by_step', 'compact', 'answer_first', 'direct_verify', 'reviewer_evidence'],
+                        choices=['step_by_step', 'compact', 'answer_first', 'answer_first_locked',
+                                 'visual_facts', 'direct_verify', 'reviewer_evidence'],
                         help='prompt style used when --chain_of_thoughts is enabled')
     parser.add_argument('--direct_verify_policy', type=str, default='balanced',
                         choices=['balanced', 'keep_stronger', 'conflict_only', 'revise_freely', 'no_fallback'],
