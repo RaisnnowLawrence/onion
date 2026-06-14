@@ -1,4 +1,4 @@
-# VisualCoT Experiment Project Handoff
+# Onion Experiment Project Handoff
 
 Last updated: 2026-06-14
 
@@ -25,7 +25,7 @@ The current empirical answer is nuanced:
 Use this directory as the main project root:
 
 ```text
-/data2/lizhengxue/WorkSpace/visualcot_experiment_repo
+/data2/lizhengxue/WorkSpace/onion
 ```
 
 GitHub remote:
@@ -170,8 +170,8 @@ Use a tiny shard to process one sample:
 ```bash
 CUDA_VISIBLE_DEVICES=3 MPLCONFIGDIR=/tmp/matplotlib_visualcot_smoke \
 /data2/lizhengxue/anaconda3/envs/sam/bin/python forward_code/onion.py \
-  --cache_path /data2/lizhengxue/WorkSpace/visualcot_experiment_repo/local_artifacts/smoke_cache/all_modules_sam_idx40 \
-  --output_path /data2/lizhengxue/WorkSpace/visualcot_experiment_repo/local_artifacts/smoke_outputs/all_modules_sam_idx40 \
+  --cache_path /data2/lizhengxue/WorkSpace/onion/local_artifacts/smoke_cache/all_modules_sam_idx40 \
+  --output_path /data2/lizhengxue/WorkSpace/onion/local_artifacts/smoke_outputs/all_modules_sam_idx40 \
   --caption_type vinvl \
   --n_shot 1 \
   --n_ensemble 1 \
@@ -362,16 +362,16 @@ Therefore:
 Before significant code changes:
 
 ```bash
-git -C /data2/lizhengxue/WorkSpace/visualcot_experiment_repo status --short
-git -C /data2/lizhengxue/WorkSpace/visualcot_experiment_repo log --oneline -5
+git -C /data2/lizhengxue/WorkSpace/onion status --short
+git -C /data2/lizhengxue/WorkSpace/onion log --oneline -5
 ```
 
 After a meaningful change:
 
 ```bash
-git -C /data2/lizhengxue/WorkSpace/visualcot_experiment_repo add <files>
-git -C /data2/lizhengxue/WorkSpace/visualcot_experiment_repo commit -m "<message>"
-git -C /data2/lizhengxue/WorkSpace/visualcot_experiment_repo push
+git -C /data2/lizhengxue/WorkSpace/onion add <files>
+git -C /data2/lizhengxue/WorkSpace/onion commit -m "<message>"
+git -C /data2/lizhengxue/WorkSpace/onion push
 ```
 
 Do not commit large local outputs. `local_artifacts/` is intentionally ignored.

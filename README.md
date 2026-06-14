@@ -1,4 +1,4 @@
-# VisualCoT Experiment Repository
+# Onion Experiment Repository
 
 This repository combines the local VisualCoT forward-code snapshot and the A-OKVQA ablation summaries.
 

@@ -18,7 +18,7 @@
 当前版本控制仓库：
 
 ```text
-/data2/lizhengxue/WorkSpace/visualcot_experiment_repo
+/data2/lizhengxue/WorkSpace/onion
 git@github.com:RaisnnowLawrence/visualcot_experiment_repo.git
 ```
 

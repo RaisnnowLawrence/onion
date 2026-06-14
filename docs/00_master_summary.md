@@ -191,7 +191,7 @@ Round 4/5：可重复一轮证据和复核
 GitHub 仓库：
 
 ```text
-/data2/lizhengxue/WorkSpace/visualcot_experiment_repo
+/data2/lizhengxue/WorkSpace/onion
 git@github.com:RaisnnowLawrence/visualcot_experiment_repo.git
 ```
 
