@@ -319,13 +319,13 @@ class aokvqa_dataset:
     # 根据图片id加载图片
     def find_image(self, img_key):
         split = self.args.split_name
-        img_full_path = os.path.join(self.args.raw_image_dir,  "val2017/", "COCO_%s2014_%012d.jpg" % (split, img_key))
+        img_full_path = os.path.join(self.args.raw_image_dir,  f"{split}2017/", "COCO_%s2014_%012d.jpg" % (split, img_key))
         return Image.open(img_full_path).convert("RGB")
 
     # 获取图片路径
     def find_image_path(self, img_key):
         split = self.args.split_name
-        img_full_path = os.path.join(self.args.raw_image_dir,  "val2017/", "COCO_%s2014_%012d.jpg" % (split, img_key))
+        img_full_path = os.path.join(self.args.raw_image_dir,  f"{split}2017/", "COCO_%s2014_%012d.jpg" % (split, img_key))
         return img_full_path
 
 # 根据图片id加载图片

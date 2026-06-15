@@ -18,6 +18,7 @@ from transformers import CLIPTokenizer, CLIPTextModel
 from PIL import Image
 import datetime
 import base64
+from collections import Counter, defaultdict
 from modelscope import Qwen3VLForConditionalGeneration, AutoProcessor
 from transformers import AutoTokenizer
 from lang_sam import LangSAM
@@ -46,6 +47,9 @@ class onion:
         self.attention_object = []
         self.qwen_global_caption_cache = {}
         self.qwen_local_caption_cache = {}
+        self.strategy_profile = {}
+        self.val_ocr_text = getattr(dataset, "val_ocr_text", {})
+        self.train_ocr_text = getattr(dataset, "train_ocr_text", {})
         
         # 引擎初始化
         self.initialize_qwen(self.args.engine)
@@ -58,6 +62,9 @@ class onion:
 
         # 加载wit外部知识
         self.wit_knowkedge = self.load_wit_knowkedge()
+
+        if getattr(args, "strategy_profile_path", ""):
+            self.strategy_profile = self.load_strategy_profile(args.strategy_profile_path)
 
         if args.with_clip_verify or args.choice_only or args.use_clip_thought_verify:
             model = CLIPTextModel.from_pretrained("/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-model/clip-vit-base-patch16")
@@ -155,6 +162,602 @@ class onion:
             return True
         cue_words = ("visible", "object", "cue", "image", "background", "foreground")
         return any(word in cleaned.lower() for word in cue_words) and len(words) > 3
+
+    def _classify_vqa_question_type(self, question):
+        text = str(question).lower()
+        text_cues = ("text", "word", "letter", "sign", "read", "says", "written", "logo", "number")
+        visual_detail_cues = (
+            "how many", "count", "what color", "which color", "color", "where", "which side",
+            "left", "right", "behind", "front", "next to", "wearing", "holding", "doing",
+            "mouth", "hand", "what is in", "what are in", "what is on"
+        )
+        knowledge_cues = (
+            "why", "used for", "use for", "purpose", "probably", "most likely", "event",
+            "sport", "game", "season", "weather", "celebrated", "celebrating"
+        )
+        category_cues = (
+            "what kind", "what type", "which animal", "what animal", "what food", "what object",
+            "what item", "what device", "what appliance", "made of"
+        )
+        if any(cue in text for cue in text_cues):
+            return "text_ocr"
+        if any(cue in text for cue in visual_detail_cues):
+            return "visual_detail"
+        if any(cue in text for cue in knowledge_cues):
+            return "knowledge"
+        if any(cue in text for cue in category_cues):
+            return "category"
+        return "general"
+
+    def _candidate_evidence_scope(self, question_type):
+        if question_type == "text_ocr":
+            return "Use OCR/text evidence and the original image heavily. Avoid relying on generic captions."
+        if question_type == "visual_detail":
+            return "Use visible image details, selected objects, regional evidence, and marked images if available."
+        if question_type == "knowledge":
+            return "Use the image to identify the scene/object, then use only directly relevant commonsense evidence."
+        if question_type == "category":
+            return "Use object identity, attributes, and local visual evidence. Avoid over-specific guesses."
+        return "Use the original image first; treat text evidence as secondary and non-authoritative."
+
+    def _question_has_any(self, question, cues):
+        question_l = str(question).lower()
+        return any(cue in question_l for cue in cues)
+
+    def _question_is_count(self, question):
+        return self._question_has_any(question, ("how many", "number of", "count"))
+
+    def _question_is_ocr(self, question):
+        return self._question_has_any(
+            question, ("text", "word", "letter", "sign", "read", "says", "written", "logo")
+        )
+
+    def _normalize_candidate_answer(self, answer):
+        return process_answer(self._clean_short_answer(answer))
+
+    def _dedupe_candidate_records(self, records):
+        deduped = []
+        seen = set()
+        for rec in records:
+            answer = self._clean_short_answer(rec.get("answer", ""))
+            norm = self._normalize_candidate_answer(answer)
+            if not norm or norm in seen or self._looks_like_visual_cue_list(answer):
+                continue
+            new_rec = dict(rec)
+            new_rec["answer"] = answer
+            new_rec["normalized"] = norm
+            deduped.append(new_rec)
+            seen.add(norm)
+        return deduped
+
+    def _candidate_consensus_answer(self, records):
+        counts = {}
+        first_answer = {}
+        for rec in records:
+            answer = self._clean_short_answer(rec.get("answer", ""))
+            if self._looks_like_visual_cue_list(answer):
+                continue
+            norm = rec.get("normalized") or self._normalize_candidate_answer(answer)
+            if not norm:
+                continue
+            counts[norm] = counts.get(norm, 0) + 1
+            first_answer.setdefault(norm, answer)
+        if not counts:
+            return ""
+        best_norm = max(counts, key=counts.get)
+        if counts[best_norm] >= max(2, getattr(self.args, "candidate_judge_consensus_votes", 2)):
+            return first_answer[best_norm]
+        return ""
+
+    def _format_candidate_prompt(self, question, choice_text, context, style, question_type):
+        base = (
+            "Answer the visual question with a single word or short phrase.\n"
+            "Do not list objects. Do not write a long explanation.\n"
+            "Question type: %s\n"
+        ) % question_type
+        if context:
+            base += "Brief Context: %s\n" % self._truncate_text(context, 900)
+        base += "Question: %s%s\n" % (question, choice_text)
+        if style == "image_only":
+            return (
+                "Answer using the image itself. Ignore any hidden captions or prior evidence.\n"
+                "Return only the short answer.\n"
+                "Question: %s%s\nAnswer:"
+            ) % (question, choice_text)
+        if style == "answer_first_locked":
+            return (
+                base +
+                "Give the answer before any reasoning and do not revise it after giving reasons.\n"
+                "Output exactly:\n"
+                "Answer: <short answer>\n"
+                "Reasons:\n"
+                "1. <visible reason>\n"
+                "2. <visible reason>"
+            )
+        if style == "caption_only":
+            return (
+                "Answer using the image and this brief caption/context. Keep the answer short.\n"
+                "Brief Context: %s\n"
+                "Question: %s%s\nAnswer:"
+            ) % (self._truncate_text(context, 900), question, choice_text)
+        if style == "visual_detail":
+            return (
+                base +
+                "Focus on directly visible local details. If the question asks count/color/text/location, inspect carefully.\n"
+                "Answer:"
+            )
+        if style == "knowledge_guarded":
+            return (
+                base +
+                "Use commonsense only after identifying visible evidence in the image. Do not answer from caption alone.\n"
+                "Answer:"
+            )
+        if style == "count_specialist":
+            return (
+                "You are solving a visual counting question.\n"
+                "First identify exactly what needs to be counted. Inspect the full image and relevant local objects.\n"
+                "Return only a number word such as zero, one, two, three, four, five, six, seven, eight, nine, or ten.\n"
+                "Do not use digits. Do not explain.\n"
+                "Context: %s\n"
+                "Question: %s%s\n"
+                "Answer:"
+            ) % (self._truncate_text(context, 1200), question, choice_text)
+        if style == "ocr_specialist":
+            return (
+                "Answer the question by carefully reading visible text, signs, screens, logos, labels, or numbers in the image.\n"
+                "Use OCR/context only as hints; verify against the image when possible.\n"
+                "Return only the short answer.\n"
+                "Context/OCR hints: %s\n"
+                "Question: %s%s\n"
+                "Answer:"
+            ) % (self._truncate_text(context, 1200), question, choice_text)
+        if style == "coverage_scan":
+            return (
+                "Answer after scanning the full image, selected objects, and regional/context evidence.\n"
+                "Do not follow the first obvious guess if a smaller or background object better answers the question.\n"
+                "Return only a single word or short phrase.\n"
+                "Context: %s\n"
+                "Question: %s%s\n"
+                "Answer:"
+            ) % (self._truncate_text(context, 1400), question, choice_text)
+        if style == "contrastive":
+            return (
+                "A previous VQA answer may be biased toward the most obvious object.\n"
+                "Generate a plausible alternative answer only if it is visually supported by the image or context.\n"
+                "If no better alternative is visible, repeat the initial answer.\n"
+                "Initial answer: %s\n"
+                "Context: %s\n"
+                "Question: %s%s\n"
+                "Alternative final answer:"
+            ) % (self._clean_short_answer(getattr(self, "_current_initial_answer", "")),
+                 self._truncate_text(context, 1200), question, choice_text)
+        return base + "Answer:"
+
+    def _call_candidate_answer(self, label, prompt, image_path, extractor="short"):
+        response = self._call_llm(prompt, image_path=image_path)
+        if extractor == "first_answer":
+            answer = self._extract_first_answer_line(response)
+        elif extractor == "structured":
+            answer = self._extract_structured_cot_answer(response)
+        else:
+            answer = self._clean_short_answer(self._extract_answer_from_response(response))
+        return {
+            "label": label,
+            "answer": answer,
+            "prompt": prompt,
+            "response": response,
+        }
+
+    def _format_candidate_judge_prompt(self, question, choice_text, question_type, evidence_text, candidate_records):
+        candidate_lines = []
+        for idx, rec in enumerate(candidate_records, start=1):
+            candidate_lines.append("%d. [%s] %s" % (idx, rec.get("label", "candidate"), rec.get("answer", "")))
+        return (
+            "You are a conservative VQA answer judge. The candidate answers were produced by different strategies.\n"
+            "Your job is to choose the best final answer, not to freely invent a new one.\n"
+            "Prefer a candidate answer that is directly supported by the image. If evidence is uncertain, prefer the "
+            "direct or answer-first candidate over evidence-heavy candidates.\n"
+            "%s\n"
+            "Question type: %s\n"
+            "Question: %s%s\n"
+            "Candidate Answers:\n"
+            "%s\n"
+            "Evidence:\n"
+            "%s\n"
+            "Output exactly in this format:\n"
+            "Evidence Check: supported / contradicted / uncertain\n"
+            "Chosen Candidate: <number>\n"
+            "Final Answer:"
+        ) % (
+            self._candidate_evidence_scope(question_type),
+            question_type,
+            question,
+            choice_text,
+            "\n".join(candidate_lines),
+            evidence_text,
+        )
+
+    def _extract_candidate_judge_answer(self, response, candidate_records, fallback_answer):
+        import re
+
+        response_clean = str(response).strip()
+        match = re.search(r"chosen\s+candidate\s*:\s*(\d+)", response_clean, flags=re.IGNORECASE)
+        if match:
+            idx = int(match.group(1)) - 1
+            if 0 <= idx < len(candidate_records):
+                return self._clean_short_answer(candidate_records[idx]["answer"])
+
+        final_answer = self._extract_structured_cot_answer(response_clean)
+        final_norm = self._normalize_candidate_answer(final_answer)
+        for rec in candidate_records:
+            if final_norm and final_norm == rec.get("normalized"):
+                return self._clean_short_answer(rec["answer"])
+
+        if self._looks_like_visual_cue_list(final_answer):
+            return self._clean_short_answer(fallback_answer)
+        if getattr(self.args, "candidate_judge_allow_new_answer", False):
+            return final_answer
+        return self._clean_short_answer(fallback_answer)
+
+    def load_strategy_profile(self, profile_path):
+        profile = {}
+        if not profile_path or not os.path.isfile(profile_path):
+            print(f"[strategy_router] profile missing, route defaults to direct: {profile_path}")
+            return profile
+
+        with open(profile_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                key = rec.get("key")
+                if not key:
+                    continue
+                if "scores" in rec:
+                    profile[key] = rec
+                    continue
+
+                strategy = rec.get("strategy")
+                if not strategy:
+                    continue
+                dst = profile.setdefault(key, {
+                    "key": key,
+                    "image_id": rec.get("image_id"),
+                    "question": rec.get("question", ""),
+                    "question_type": rec.get("question_type", ""),
+                    "scores": {},
+                    "answers": {},
+                })
+                dst["scores"][strategy] = float(rec.get("score", 0.0))
+                dst["answers"][strategy] = rec.get("pred_answer", "")
+
+        print(f"[strategy_router] loaded {len(profile)} strategy-profile samples from {profile_path}")
+        return profile
+
+    def _route_with_strategy_profile(self, key, question):
+        if not self.strategy_profile:
+            return {
+                "strategy": self.args.strategy_router_default,
+                "reason": "missing_profile",
+                "neighbors": [],
+                "direct_avg": 0.0,
+                "cot_avg": 0.0,
+                "rescue_rate": 0.0,
+                "damage_rate": 0.0,
+            }
+
+        topk = max(1, self.args.strategy_topk)
+        context_keys = self.get_context_keys(key, self.args.strategy_retrieval_metric, topk * 3)
+        if not context_keys:
+            context_keys = []
+
+        direct_name = self.args.strategy_direct_name
+        cot_name = self.args.strategy_cot_name
+        neighbors = []
+        for ctx_key in context_keys:
+            rec = self.strategy_profile.get(ctx_key)
+            if not rec:
+                continue
+            scores = rec.get("scores", {})
+            if direct_name not in scores or cot_name not in scores:
+                continue
+            neighbors.append({
+                "key": ctx_key,
+                "direct": float(scores.get(direct_name, 0.0)),
+                "cot": float(scores.get(cot_name, 0.0)),
+                "question_type": rec.get("question_type", ""),
+            })
+            if len(neighbors) >= topk:
+                break
+
+        if len(neighbors) < self.args.strategy_min_neighbors:
+            return {
+                "strategy": self.args.strategy_router_default,
+                "reason": "too_few_neighbors",
+                "neighbors": neighbors,
+                "direct_avg": 0.0,
+                "cot_avg": 0.0,
+                "rescue_rate": 0.0,
+                "damage_rate": 0.0,
+            }
+
+        direct_avg = sum(n["direct"] for n in neighbors) / len(neighbors)
+        cot_avg = sum(n["cot"] for n in neighbors) / len(neighbors)
+        rescue = [n for n in neighbors if n["direct"] <= 0.0 and n["cot"] > 0.0]
+        damage = [n for n in neighbors if n["direct"] > 0.0 and n["cot"] <= 0.0]
+        rescue_rate = len(rescue) / len(neighbors)
+        damage_rate = len(damage) / len(neighbors)
+
+        use_cot = (
+            cot_avg - direct_avg >= self.args.strategy_margin
+            and rescue_rate >= self.args.strategy_min_rescue_rate
+            and damage_rate <= self.args.strategy_max_damage_rate
+        )
+        strategy = cot_name if use_cot else direct_name
+        reason = "cot_neighbors_win" if use_cot else "direct_default_or_safer"
+        return {
+            "strategy": strategy,
+            "reason": reason,
+            "neighbors": neighbors,
+            "direct_avg": direct_avg,
+            "cot_avg": cot_avg,
+            "rescue_rate": rescue_rate,
+            "damage_rate": damage_rate,
+        }
+
+    def _route_with_multi_strategy_profile(self, key, question):
+        default_strategy = self.args.multi_strategy_default
+        if not self.strategy_profile:
+            return {
+                "strategy": default_strategy,
+                "reason": "missing_profile",
+                "neighbors": [],
+                "strategy_avgs": {},
+                "best_avg": 0.0,
+                "default_avg": 0.0,
+            }
+
+        strategies = [s.strip() for s in self.args.multi_strategy_names.split(",") if s.strip()]
+        if default_strategy not in strategies:
+            strategies.insert(0, default_strategy)
+
+        context_keys = self.get_context_keys(
+            key, self.args.strategy_retrieval_metric, max(1, self.args.strategy_topk * 4)
+        ) or []
+        neighbors = []
+        for ctx_key in context_keys:
+            rec = self.strategy_profile.get(ctx_key)
+            if not rec:
+                continue
+            scores = rec.get("scores", {})
+            if default_strategy not in scores:
+                continue
+            available = {name: float(scores[name]) for name in strategies if name in scores}
+            if len(available) < 2:
+                continue
+            neighbors.append({"key": ctx_key, "scores": available})
+            if len(neighbors) >= self.args.strategy_topk:
+                break
+
+        if len(neighbors) < self.args.strategy_min_neighbors:
+            return {
+                "strategy": default_strategy,
+                "reason": "too_few_neighbors",
+                "neighbors": neighbors,
+                "strategy_avgs": {},
+                "best_avg": 0.0,
+                "default_avg": 0.0,
+            }
+
+        sums = defaultdict(float)
+        counts = Counter()
+        for item in neighbors:
+            for name, score in item["scores"].items():
+                sums[name] += score
+                counts[name] += 1
+
+        avgs = {
+            name: (sums[name] / counts[name])
+            for name in strategies
+            if counts[name] >= self.args.strategy_min_neighbors
+        }
+        default_avg = avgs.get(default_strategy, 0.0)
+        if not avgs:
+            return {
+                "strategy": default_strategy,
+                "reason": "no_strategy_avgs",
+                "neighbors": neighbors,
+                "strategy_avgs": {},
+                "best_avg": 0.0,
+                "default_avg": default_avg,
+            }
+
+        best_strategy = max(avgs, key=avgs.get)
+        best_avg = avgs[best_strategy]
+        if best_strategy == default_strategy:
+            selected = default_strategy
+            reason = "default_best"
+        elif best_avg - default_avg >= self.args.multi_strategy_margin:
+            selected = best_strategy
+            reason = "best_neighbor_strategy"
+        else:
+            selected = default_strategy
+            reason = "default_within_margin"
+
+        return {
+            "strategy": selected,
+            "reason": reason,
+            "neighbors": neighbors,
+            "strategy_avgs": avgs,
+            "best_avg": best_avg,
+            "default_avg": default_avg,
+        }
+
+    def _format_protected_review_prompt(self, cur_caption, question, choice_text, initial_answer):
+        return (
+            "You are a conservative VQA reviewer. The initial answer is usually correct.\n"
+            "Your task is not to freely reason from scratch. Only revise if the image or context gives direct, "
+            "specific, high-confidence evidence that contradicts the initial answer.\n"
+            "If evidence is incomplete, ambiguous, caption-like, or merely suggests another possibility, keep the initial answer.\n"
+            "=== Brief Context:\n"
+            "%s\n"
+            "=== Question:\n"
+            "Question: %s%s\n"
+            "Initial Answer: %s\n"
+            "Output exactly in this format:\n"
+            "Support: <short evidence supporting the initial answer, or none>\n"
+            "Contradiction: <short direct contradictory evidence, or none>\n"
+            "Evidence Check: supported / contradicted / uncertain\n"
+            "Confidence: high / medium / low\n"
+            "Decision: keep / revise\n"
+            "Final Answer:"
+        ) % (cur_caption, question, choice_text, initial_answer)
+
+    def _extract_protected_review_answer(self, response, initial_answer):
+        response_clean = str(response).strip()
+        first_lines = "\n".join(response_clean.splitlines()[:6]).lower()
+        if "decision: revise" not in first_lines:
+            return self._clean_short_answer(initial_answer)
+        if "evidence check: contradicted" not in first_lines and "contradicted" not in first_lines:
+            return self._clean_short_answer(initial_answer)
+        if "confidence: high" not in first_lines:
+            return self._clean_short_answer(initial_answer)
+        revised = self._extract_structured_cot_answer(response_clean)
+        if self._looks_like_visual_cue_list(revised):
+            return self._clean_short_answer(initial_answer)
+        return revised
+
+    def _run_reflective_r3_runtime(self, question, choice_text, cur_caption, image_path):
+        first_prompt = (
+            "Answer the visual question with a single word or short phrase.\n"
+            "Do not explain yet. The first response should contain only the answer.\n"
+            "Brief Context: %s\n"
+            "Question: %s%s\n"
+            "Answer:"
+        ) % (cur_caption, question, choice_text)
+        first_response = self._call_llm(first_prompt, image_path=image_path)
+        current_answer = self._extract_first_answer_line(first_response)
+        rationale_prompt = self._format_reflective_rationale_prompt(
+            cur_caption, question, choice_text, current_answer
+        )
+        rationale_response = self._call_llm(rationale_prompt, image_path=image_path)
+        review_prompt = self._format_reflective_review_prompt(
+            cur_caption, question, choice_text, current_answer, rationale_response
+        )
+        review_response = self._call_llm(review_prompt, image_path=image_path)
+        final_answer = self._extract_reflective_review_answer(review_response, current_answer)
+        transcript = (
+            "Reflective R3 Runtime\n"
+            "Round 1 Prompt:\n%s\n"
+            "Round 1 Response:\n%s\n"
+            "Evidence Prompt:\n%s\n"
+            "Evidence Response:\n%s\n"
+            "Review Prompt:\n%s\n"
+            "Review Response:\n%s\n"
+            "Final Answer: %s"
+        ) % (
+            first_prompt, first_response, rationale_prompt, rationale_response,
+            review_prompt, review_response, final_answer,
+        )
+        return final_answer, transcript
+
+    def _run_answer_first_locked_runtime(self, question, choice_text, image_path):
+        prompt = self._format_candidate_prompt(
+            question, choice_text, "", "answer_first_locked", "general"
+        )
+        response = self._call_llm(prompt, image_path=image_path)
+        answer = self._extract_first_answer_line(response)
+        return answer, "Answer First Locked Runtime\nPrompt:\n%s\nResponse:\n%s\nFinal Answer: %s" % (
+            prompt, response, answer
+        )
+
+    def _is_complex_for_decomposition(self, question):
+        if self.args.decompose_complexity_mode == "always":
+            return True
+        if self.args.decompose_complexity_mode == "never":
+            return False
+
+        text = str(question).lower()
+        broad_cues = (
+            "how many", "number of", "count", "what type", "what kind", "which one",
+            "which of", "where", "which side", "left", "right", "front", "behind",
+            "next to", "under", "above", "why", "used for", "use for", "purpose",
+            "probably", "most likely", "likely", "might", "could", "brand", "sign",
+            "text", "word", "letter", "says", "written", "logo", "first number",
+            "second", "time", "hour", "percent", "associated", "famous", "made of",
+        )
+        conservative_cues = (
+            "why", "used for", "use for", "purpose", "probably", "most likely",
+            "likely", "brand", "sign", "text", "word", "letter", "says", "written",
+            "logo", "first number", "license", "time", "hour", "percent", "in front",
+            "behind", "associated", "famous",
+        )
+        cues = conservative_cues if self.args.decompose_complexity_mode == "conservative" else broad_cues
+        return any(cue in text for cue in cues)
+
+    def _format_decompose_prompt(self, question, choice_text, context, direct_answer, question_type):
+        return (
+            "You are solving a complex visual question by decomposing it into smaller evidence questions.\n"
+            "Do not write free-form chain-of-thought. Use short, evidence-seeking subquestions.\n"
+            "Each subquestion should check one visible detail, text/brand cue, spatial relation, count, or commonsense link needed by the original question.\n"
+            "If the question is answerable directly, use only one simple subquestion.\n"
+            "Return a single short final answer.\n"
+            "Question type: %s\n"
+            "Initial direct answer: %s\n"
+            "Context: %s\n"
+            "Original Question: %s%s\n"
+            "Output exactly:\n"
+            "Subquestions:\n"
+            "1. <subquestion> -> <short answer>\n"
+            "2. <subquestion> -> <short answer>\n"
+            "Final Answer:"
+        ) % (
+            question_type,
+            self._clean_short_answer(direct_answer),
+            self._truncate_text(context, self.args.decompose_context_max_chars),
+            question,
+            choice_text,
+        )
+
+    def _format_decompose_verify_prompt(self, question, choice_text, context, direct_answer,
+                                        decomposed_answer, decompose_response):
+        return (
+            "You are a conservative VQA verifier.\n"
+            "The direct answer is usually safer for simple questions. The decomposed answer should replace it only when the subquestions provide clear, specific evidence that the direct answer missed.\n"
+            "If the decomposed evidence is uncertain, generic, or only guesses from commonsense, keep the direct answer.\n"
+            "Context: %s\n"
+            "Question: %s%s\n"
+            "Direct Answer: %s\n"
+            "Decomposed Answer: %s\n"
+            "Decomposition Trace:\n%s\n"
+            "Output exactly:\n"
+            "Evidence Check: direct_supported / decomposed_supported / uncertain\n"
+            "Decision: keep_direct / use_decomposed\n"
+            "Final Answer:"
+        ) % (
+            self._truncate_text(context, self.args.decompose_context_max_chars),
+            question,
+            choice_text,
+            self._clean_short_answer(direct_answer),
+            self._clean_short_answer(decomposed_answer),
+            self._truncate_text(decompose_response, 1600),
+        )
+
+    def _extract_decompose_verify_answer(self, response, direct_answer, decomposed_answer):
+        first_lines = "\n".join(str(response).splitlines()[:6]).lower()
+        if "decision: use_decomposed" not in first_lines:
+            return self._clean_short_answer(direct_answer)
+        if "evidence check: decomposed_supported" not in first_lines and "decomposed_supported" not in first_lines:
+            return self._clean_short_answer(direct_answer)
+        final_answer = self._extract_structured_cot_answer(response)
+        if not final_answer or self._looks_like_visual_cue_list(final_answer):
+            return self._clean_short_answer(direct_answer)
+        final_norm = self._normalize_candidate_answer(final_answer)
+        decomposed_norm = self._normalize_candidate_answer(decomposed_answer)
+        if decomposed_norm and final_norm != decomposed_norm:
+            return self._clean_short_answer(direct_answer)
+        return self._clean_short_answer(final_answer)
 
     def _format_direct_verify_prompt(self, cur_caption, question, choice_text, initial_answer):
         policy_text = {
@@ -429,7 +1032,8 @@ class onion:
         return final_answer
 
     def _format_cot_answer_prompt(self, prompt_before_answer):
-        if self.args.cot_style in ("direct_verify", "reviewer_evidence"):
+        if self.args.cot_style in ("direct_verify", "reviewer_evidence", "candidate_judge", "rag_strategy_router",
+                                   "protected_reflective", "multi_strategy_router"):
             return (
                 "=== Please answer directly with a single word or short phrase:\n"
                 "%s" % (prompt_before_answer)
@@ -723,6 +1327,9 @@ class onion:
             if idx % self.args.num_shards != self.args.shard_id:
                 continue
 
+            if self.args.max_samples_per_shard > 0 and len(answers) >= self.args.max_samples_per_shard:
+                break
+
             print('----------inference----------processing sample %s/%s----------for loop----------' % (str(idx), str(len(self.dataset.val_keys))))
 
             # 如果已保存该样本结果则跳过
@@ -743,6 +1350,20 @@ class onion:
             final_answer, answer_list = self.sample_inference_interactive(key)
             answers.append(final_answer)
             full_answers.append(answer_list)
+            if self.args.strategy_profile_output:
+                image_key = int(key.split('<->')[0]) if self.args.dataset_name!="fvqa" else self.image_dict[key]
+                profile_record = {
+                    "key": key,
+                    "image_id": image_key,
+                    "question": self.dataset.question_dict[key],
+                    "question_type": self._classify_vqa_question_type(self.dataset.question_dict[key]),
+                    "strategy": self.args.strategy_name,
+                    "pred_answer": final_answer[1],
+                    "score": float(final_answer[3]),
+                    "split": self.args.split_name,
+                }
+                with open(self.args.strategy_profile_output, "a") as f:
+                    f.write(json.dumps(profile_record, ensure_ascii=False) + "\n")
             print('-----inference-----processing-----answer-----beg')
             print(final_answer)
             print(answer_list)
@@ -825,8 +1446,9 @@ class onion:
             else:
                 tmp_attr = [attr['conf'], attr['class'], attr['attr']]
             if self.args.caption_type == "vinvl_ocr":
-                if attr['class'] in self.val_ocr_text[image_key]:
-                    tmp_attr.append(self.val_ocr_text[image_key][attr['class']])
+                ocr_for_image = self.val_ocr_text.get(image_key, {})
+                if attr['class'] in ocr_for_image:
+                    tmp_attr.append(ocr_for_image[attr['class']])
                 else:
                     tmp_attr.append("")
             attr_list.append(tmp_attr)
@@ -887,7 +1509,7 @@ class onion:
                     if idx is not None and 0 <= idx < len(attr_list):
                         noticed_caption_list.append(attr_list[idx])
                 # 保留现有Qwen caption作为全局描述。
-                noticed_caption_list.append(self.caption_qwen[str(image_key)])
+                noticed_caption_list.append(self.caption_qwen.get(str(image_key), ""))
 
             # onion指令阶段
             self.messages = None
@@ -1082,11 +1704,11 @@ class onion:
         # 获取问题、答案、caption
         question = self.dataset.question_dict[key]
         answer = self.dataset.answer_dict[key]
-        caption = self.dataset.inputtext_dict[image_key][0]
+        caption = self.dataset.inputtext_dict.get(image_key, [""])[0]
         # caption += ' '
         # print(type(caption))
         # print(type(self.caption_qwen[str(image_key)]))
-        qwen_caption = self.caption_qwen[str(image_key)]
+        qwen_caption = self.caption_qwen.get(str(image_key), caption)
         simplified_caption_prompt = 'Please organize the parts relevant to the question from the given description.\n'
         simplified_caption_prompt += 'If no valid relevant information is available, please reply with "None".'
         simplified_caption_prompt += 'Question: %s\n' % question
@@ -1143,6 +1765,10 @@ class onion:
         enhance_image_path = None
         enhance_caption = None
         enhance_knowledge = None
+        question_type = self._classify_vqa_question_type(question)
+        multi_strategy_route = None
+        if self.args.cot_style == "multi_strategy_router":
+            multi_strategy_route = self._route_with_multi_strategy_profile(key, question)
         selective_evidence_kinds = {"caption"}
         if self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective":
             selective_evidence_kinds = self._selective_reviewer_evidence_kinds(question)
@@ -1159,6 +1785,15 @@ class onion:
             effective_use_image_enhance = self.args.use_image_enhance and "image" in selective_evidence_kinds
             effective_use_caption_enhance = "caption_enhance" in selective_evidence_kinds
             effective_use_knowledge_enhance = "knowledge" in selective_evidence_kinds
+        if self.args.cot_style == "candidate_judge" and self.args.candidate_judge_route_evidence:
+            effective_use_image_enhance = self.args.use_image_enhance and question_type in ("text_ocr", "visual_detail", "category")
+            effective_use_caption_enhance = self.args.use_caption_enhance and question_type in ("visual_detail", "category", "general")
+            effective_use_knowledge_enhance = self.args.use_knowledge_enhance and question_type in ("knowledge", "category")
+        if self.args.cot_style == "multi_strategy_router":
+            selected_strategy = (multi_strategy_route or {}).get("strategy", self.args.multi_strategy_default)
+            effective_use_image_enhance = self.args.use_image_enhance and selected_strategy == "marker_mcts"
+            effective_use_caption_enhance = False
+            effective_use_knowledge_enhance = False
         selective_mode = self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective"
         
         # ========== 三个核心增强模块（由args控制开关） ==========
@@ -1315,7 +1950,11 @@ class onion:
             prompt += '===The question you need to answer:\n'
             prompt += 'Question: %s%s\n' % (question, choice_text)
             if self.args.chain_of_thoughts:
-                prompt += self._format_cot_answer_prompt(prompt_before_answer)
+                if self.args.cot_style == "complex_decompose":
+                    prompt += '=== Please answer directly with a single word or short phrase:\n'
+                    prompt += '%s' % (prompt_before_answer)
+                else:
+                    prompt += self._format_cot_answer_prompt(prompt_before_answer)
             else:
                 prompt += '=== Please fill in the answer with a short phrase or a single word:\n'
                 prompt += '%s' % (prompt_before_answer)
@@ -1346,7 +1985,353 @@ class onion:
                 response = self._call_llm(prompt, image_path=answer_image_path)
 
                 if self.args.chain_of_thoughts:
-                    if self.args.cot_style == "direct_verify":
+                    if self.args.cot_style == "multi_strategy_router":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        route = multi_strategy_route or self._route_with_multi_strategy_profile(key, question)
+                        selected_strategy = route["strategy"]
+                        runtime_image_path = answer_image_path
+                        if selected_strategy == "marker_mcts" and enhance_image_path:
+                            runtime_image_path = enhance_image_path
+
+                        if selected_strategy == "direct":
+                            extracted_answer = initial_answer
+                            runtime_trace = "Direct Runtime\nInitial Response:\n%s\nFinal Answer: %s" % (
+                                response, extracted_answer
+                            )
+                        elif selected_strategy == "reflective_r3":
+                            extracted_answer, runtime_trace = self._run_reflective_r3_runtime(
+                                question, choice_text, cur_caption, runtime_image_path
+                            )
+                        elif selected_strategy == "answer_first_no_caption":
+                            extracted_answer, runtime_trace = self._run_answer_first_locked_runtime(
+                                question, choice_text, runtime_image_path
+                            )
+                        elif selected_strategy == "marker_mcts":
+                            marker_prompt = (
+                                "Answer the visual question with a single word or short phrase.\n"
+                                "Use the marked image if a marker is visible; the marker is only a visual hint, not an answer.\n"
+                                "Brief Context: %s\n"
+                                "Question: %s%s\n"
+                                "Answer:"
+                            ) % (cur_caption, question, choice_text)
+                            marker_response = self._call_llm(marker_prompt, image_path=runtime_image_path)
+                            extracted_answer = self._clean_short_answer(self._extract_answer_from_response(marker_response))
+                            runtime_trace = (
+                                "Marker MCTS Runtime\nEnhanced Image: %s\nPrompt:\n%s\nResponse:\n%s\nFinal Answer: %s"
+                            ) % (enhance_image_path, marker_prompt, marker_response, extracted_answer)
+                        else:
+                            extracted_answer = initial_answer
+                            runtime_trace = "Unknown selected strategy %s; fallback direct.\nFinal Answer: %s" % (
+                                selected_strategy, extracted_answer
+                            )
+
+                        avg_text = ", ".join(
+                            "%s:%.3f" % (name, val)
+                            for name, val in sorted(route.get("strategy_avgs", {}).items())
+                        )
+                        response = (
+                            "Multi Strategy Router: %s\n"
+                            "Route Reason: %s\n"
+                            "Route Averages: %s\n"
+                            "Default Avg: %.3f\n"
+                            "Best Avg: %.3f\n"
+                            "Initial Direct Answer: %s\n"
+                            "%s"
+                        ) % (
+                            selected_strategy,
+                            route.get("reason", ""),
+                            avg_text,
+                            route.get("default_avg", 0.0),
+                            route.get("best_avg", 0.0),
+                            initial_answer,
+                            runtime_trace,
+                        )
+                    elif self.args.cot_style == "protected_reflective":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        review_prompt = self._format_protected_review_prompt(
+                            cur_caption, question, choice_text, initial_answer
+                        )
+                        review_response = self._call_llm(review_prompt, image_path=answer_image_path)
+                        extracted_answer = self._extract_protected_review_answer(review_response, initial_answer)
+                        response = (
+                            "Initial Direct Answer: %s\n"
+                            "Protected Review Prompt:\n%s\n"
+                            "Protected Review Response:\n%s\n"
+                            "Final Answer: %s"
+                        ) % (initial_answer, review_prompt, review_response, extracted_answer)
+                    elif self.args.cot_style == "rag_strategy_router":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        route = self._route_with_strategy_profile(key, question)
+                        selected_strategy = route["strategy"]
+                        if selected_strategy == self.args.strategy_cot_name:
+                            if self.args.strategy_cot_runtime == "answer_first_locked":
+                                cot_prompt = self._format_candidate_prompt(
+                                    question, choice_text, cur_caption, "answer_first_locked", question_type
+                                )
+                                cot_response = self._call_llm(cot_prompt, image_path=answer_image_path)
+                                extracted_answer = self._extract_first_answer_line(cot_response)
+                                response = (
+                                    "RAG Strategy Router: %s\n"
+                                    "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
+                                    "Initial Direct Answer: %s\n"
+                                    "CoT Prompt:\n%s\n"
+                                    "CoT Response:\n%s\n"
+                                    "Final Answer: %s"
+                                ) % (
+                                    selected_strategy, route["direct_avg"], route["cot_avg"], route["rescue_rate"],
+                                    route["damage_rate"], route["reason"], initial_answer, cot_prompt, cot_response,
+                                    extracted_answer,
+                                )
+                            else:
+                                review_prompt = self._format_protected_review_prompt(
+                                    cur_caption, question, choice_text, initial_answer
+                                )
+                                review_response = self._call_llm(review_prompt, image_path=answer_image_path)
+                                extracted_answer = self._extract_protected_review_answer(review_response, initial_answer)
+                                response = (
+                                    "RAG Strategy Router: %s\n"
+                                    "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
+                                    "Initial Direct Answer: %s\n"
+                                    "Protected Review Prompt:\n%s\n"
+                                    "Protected Review Response:\n%s\n"
+                                    "Final Answer: %s"
+                                ) % (
+                                    selected_strategy, route["direct_avg"], route["cot_avg"], route["rescue_rate"],
+                                    route["damage_rate"], route["reason"], initial_answer, review_prompt, review_response,
+                                    extracted_answer,
+                                )
+                        else:
+                            extracted_answer = initial_answer
+                            response = (
+                                "RAG Strategy Router: %s\n"
+                                "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
+                                "Initial Direct Response:\n%s\n"
+                                "Final Answer: %s"
+                            ) % (
+                                selected_strategy, route["direct_avg"], route["cot_avg"], route["rescue_rate"],
+                                route["damage_rate"], route["reason"], response, extracted_answer,
+                            )
+                    elif self.args.cot_style == "complex_decompose":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        should_decompose = self._is_complex_for_decomposition(question)
+                        decompose_prompt = ""
+                        decompose_response = ""
+                        verify_prompt = ""
+                        verify_response = ""
+                        decomposed_answer = ""
+
+                        if should_decompose:
+                            decompose_prompt = self._format_decompose_prompt(
+                                question, choice_text, cur_caption, initial_answer, question_type
+                            )
+                            decompose_response = self._call_llm(decompose_prompt, image_path=answer_image_path)
+                            decomposed_answer = self._clean_short_answer(
+                                self._extract_structured_cot_answer(decompose_response)
+                            )
+                            if self._looks_like_visual_cue_list(decomposed_answer) or not decomposed_answer:
+                                decomposed_answer = initial_answer
+
+                            if self.args.decompose_verify:
+                                verify_prompt = self._format_decompose_verify_prompt(
+                                    question, choice_text, cur_caption, initial_answer,
+                                    decomposed_answer, decompose_response
+                                )
+                                verify_response = self._call_llm(verify_prompt, image_path=answer_image_path)
+                                extracted_answer = self._extract_decompose_verify_answer(
+                                    verify_response, initial_answer, decomposed_answer
+                                )
+                            else:
+                                extracted_answer = decomposed_answer
+                        else:
+                            extracted_answer = initial_answer
+
+                        response = (
+                            "Complex Decompose Mode: %s\n"
+                            "Should Decompose: %s\n"
+                            "Initial Direct Answer: %s\n"
+                            "Decompose Prompt:\n%s\n"
+                            "Decompose Response:\n%s\n"
+                            "Decomposed Answer: %s\n"
+                            "Verify Enabled: %s\n"
+                            "Verify Prompt:\n%s\n"
+                            "Verify Response:\n%s\n"
+                            "Final Answer: %s"
+                        ) % (
+                            self.args.decompose_complexity_mode,
+                            should_decompose,
+                            initial_answer,
+                            decompose_prompt,
+                            decompose_response,
+                            decomposed_answer,
+                            self.args.decompose_verify,
+                            verify_prompt,
+                            verify_response,
+                            extracted_answer,
+                        )
+                    elif self.args.cot_style == "candidate_judge":
+                        selected_objects = onion_instruction[1] if len(onion_instruction) > 1 else []
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        candidate_records = [{
+                            "label": "direct_context",
+                            "answer": initial_answer,
+                            "prompt": prompt,
+                            "response": response,
+                        }]
+                        self._current_initial_answer = initial_answer
+
+                        image_only_prompt = self._format_candidate_prompt(
+                            question, choice_text, "", "image_only", question_type
+                        )
+                        candidate_records.append(self._call_candidate_answer(
+                            "direct_image_only", image_only_prompt, image_path
+                        ))
+
+                        answer_first_prompt = self._format_candidate_prompt(
+                            question, choice_text, cur_caption, "answer_first_locked", question_type
+                        )
+                        candidate_records.append(self._call_candidate_answer(
+                            "answer_first_locked", answer_first_prompt, image_path, extractor="first_answer"
+                        ))
+
+                        if self.args.candidate_judge_include_caption_candidate and caption:
+                            caption_prompt = self._format_candidate_prompt(
+                                question, choice_text, caption, "caption_only", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "caption_only", caption_prompt, image_path
+                            ))
+
+                        if question_type in ("text_ocr", "visual_detail", "category"):
+                            visual_context = cur_caption
+                            if regional_context:
+                                visual_context += "\n" + regional_context
+                            if ocr_context:
+                                visual_context += "\n" + ocr_context
+                            visual_prompt = self._format_candidate_prompt(
+                                question, choice_text, visual_context, "visual_detail", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "visual_detail_guarded", visual_prompt, image_path
+                            ))
+
+                        if question_type in ("knowledge", "category"):
+                            knowledge_context = cur_caption
+                            if enhance_knowledge:
+                                knowledge_context += "\n" + enhance_knowledge
+                            knowledge_prompt = self._format_candidate_prompt(
+                                question, choice_text, knowledge_context, "knowledge_guarded", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "knowledge_guarded", knowledge_prompt, image_path
+                            ))
+
+                        if self.args.candidate_judge_include_count_candidate and self._question_is_count(question):
+                            count_context = cur_caption
+                            if regional_context:
+                                count_context += "\n" + regional_context
+                            if enhance_caption:
+                                count_context += "\n" + enhance_caption
+                            count_prompt = self._format_candidate_prompt(
+                                question, choice_text, count_context, "count_specialist", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "count_specialist", count_prompt, image_path
+                            ))
+
+                        if self.args.candidate_judge_include_ocr_candidate and self._question_is_ocr(question):
+                            ocr_candidate_context = cur_caption
+                            if ocr_context:
+                                ocr_candidate_context += "\nOCR: " + ocr_context
+                            if regional_context:
+                                ocr_candidate_context += "\n" + regional_context
+                            ocr_prompt = self._format_candidate_prompt(
+                                question, choice_text, ocr_candidate_context, "ocr_specialist", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "ocr_specialist", ocr_prompt, image_path
+                            ))
+
+                        if self.args.candidate_judge_include_coverage_candidate:
+                            coverage_context = cur_caption
+                            coverage_parts = [regional_context, ocr_context, enhance_caption, enhance_knowledge]
+                            for part in coverage_parts:
+                                if part:
+                                    coverage_context += "\n" + part
+                            coverage_prompt = self._format_candidate_prompt(
+                                question, choice_text, coverage_context, "coverage_scan", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "coverage_scan", coverage_prompt, image_path
+                            ))
+
+                        if self.args.candidate_judge_include_contrast_candidate:
+                            contrast_context = cur_caption
+                            if regional_context:
+                                contrast_context += "\n" + regional_context
+                            if ocr_context:
+                                contrast_context += "\n" + ocr_context
+                            contrast_prompt = self._format_candidate_prompt(
+                                question, choice_text, contrast_context, "contrastive", question_type
+                            )
+                            candidate_records.append(self._call_candidate_answer(
+                                "contrastive_alternative", contrast_prompt, image_path
+                            ))
+
+                        for rec in candidate_records:
+                            rec["answer"] = self._clean_short_answer(rec.get("answer", ""))
+                            rec["normalized"] = self._normalize_candidate_answer(rec["answer"])
+
+                        consensus_answer = self._candidate_consensus_answer(candidate_records)
+                        unique_candidate_records = self._dedupe_candidate_records(candidate_records)
+                        if consensus_answer and not self.args.candidate_judge_always_judge:
+                            extracted_answer = consensus_answer
+                            judge_prompt = ""
+                            judge_response = "Skipped: candidate consensus."
+                        elif len(unique_candidate_records) <= 1:
+                            extracted_answer = unique_candidate_records[0]["answer"] if unique_candidate_records else initial_answer
+                            judge_prompt = ""
+                            judge_response = "Skipped: only one valid unique candidate."
+                        else:
+                            evidence_text = self._build_reviewer_evidence(
+                                base_context=caption,
+                                selected_objects=selected_objects,
+                                regional_context=regional_context if self.args.use_all_regional_captions else regional_context,
+                                ocr_context=ocr_context if self.args.use_ocr_context else "",
+                                enhance_caption=enhance_caption,
+                                enhance_knowledge=enhance_knowledge,
+                                enhance_image_path=enhance_image_path,
+                                qwen_global_caption=qwen_global_caption if self.args.use_qwen_blip2_caption else "",
+                                qwen_local_caption=qwen_local_caption if self.args.use_qwen_blip2_caption else "",
+                            )
+                            judge_prompt = self._format_candidate_judge_prompt(
+                                question, choice_text, question_type, evidence_text, unique_candidate_records
+                            )
+                            judge_image_path = image_path
+                            if self.args.candidate_judge_use_enhanced_image and enhance_image_path:
+                                judge_image_path = enhance_image_path
+                            judge_response = self._call_llm(judge_prompt, image_path=judge_image_path)
+                            extracted_answer = self._extract_candidate_judge_answer(
+                                judge_response, unique_candidate_records, initial_answer
+                            )
+
+                        candidate_summary = "\n".join(
+                            "[%s] answer=%s\nprompt:\n%s\nresponse:\n%s"
+                            % (
+                                rec.get("label", "candidate"),
+                                rec.get("answer", ""),
+                                rec.get("prompt", ""),
+                                rec.get("response", ""),
+                            )
+                            for rec in candidate_records
+                        )
+                        response = (
+                            "Question Type: %s\n"
+                            "Candidate Answers:\n%s\n"
+                            "Judge Prompt:\n%s\n"
+                            "Judge Response:\n%s\n"
+                            "Final Answer: %s"
+                        ) % (question_type, candidate_summary, judge_prompt, judge_response, extracted_answer)
+                    elif self.args.cot_style == "direct_verify":
                         initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
                         verify_prompt = self._format_direct_verify_prompt(cur_caption, question, choice_text, initial_answer)
                         verify_response = self._call_llm(verify_prompt, image_path=answer_image_path)
@@ -1830,6 +2815,9 @@ class onion:
     
     def load_caption_qwen(self):
         file_path = '/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/caption_onion/aokvqa_val_caption_8b_256.json'
+        if not os.path.isfile(file_path):
+            print(f"[caption_qwen] missing caption file, continue with empty captions: {file_path}")
+            return {}
         caption_dict = json.load(open(file_path, 'r'))
         return caption_dict
 
@@ -2059,6 +3047,8 @@ def parser_args():
     # 数据分片（单卡多进程并行）
     parser.add_argument('--shard_id', type=int, default=0, help="shard id (0-indexed)")
     parser.add_argument('--num_shards', type=int, default=1, help="total number of shards")
+    parser.add_argument('--max_samples_per_shard', type=int, default=-1,
+                        help='optional cap on processed samples per shard for smoke/profile runs')
     # 汇总模式：不推理，只读取prompt_samples目录计算全量准确率
     parser.add_argument('--merge_only', action='store_true', help="merge shard results and compute accuracy")
     parser.add_argument('--summary_log', type=str, default='', help="path to write accuracy summary line")
@@ -2123,8 +3113,17 @@ def parser_args():
     parser.add_argument('--cot_style', type=str, default='step_by_step',
                         choices=['step_by_step', 'compact', 'answer_first', 'answer_first_locked',
                                  'visual_facts', 'direct_verify', 'reviewer_evidence',
-                                 'reflective_answer_first', 'adaptive_reflective_answer_first'],
+                                 'reflective_answer_first', 'adaptive_reflective_answer_first',
+                                 'candidate_judge', 'protected_reflective', 'rag_strategy_router',
+                                 'multi_strategy_router', 'complex_decompose'],
                         help='prompt style used when --chain_of_thoughts is enabled')
+    parser.add_argument('--decompose_complexity_mode', type=str, default='adaptive',
+                        choices=['always', 'adaptive', 'conservative', 'never'],
+                        help='which questions are decomposed by --cot_style complex_decompose')
+    parser.add_argument('--decompose_verify', action='store_true',
+                        help='conservatively verify decomposed answer against direct answer')
+    parser.add_argument('--decompose_context_max_chars', type=int, default=1400,
+                        help='maximum context characters visible to decomposition prompts')
     parser.add_argument('--reflect_rounds', type=int, default=3,
                         help='number of answer/evidence/review stages for --cot_style reflective_answer_first')
     parser.add_argument('--reflect_trigger_mode', type=str, default='always',
@@ -2152,6 +3151,61 @@ def parser_args():
                         help='which evidence providers are visible to --cot_style reviewer_evidence')
     parser.add_argument('--reviewer_disable_enhanced_image', action='store_true',
                         help='for --cot_style reviewer_evidence, keep reviewer on the original image even when MCTS creates an enhanced image')
+    parser.add_argument('--candidate_judge_consensus_votes', type=int, default=2,
+                        help='minimum matching candidate answers needed to skip the judge in --cot_style candidate_judge')
+    parser.add_argument('--candidate_judge_always_judge', action='store_true',
+                        help='always run the final candidate judge even when multiple candidates agree')
+    parser.add_argument('--candidate_judge_allow_new_answer', action='store_true',
+                        help='allow candidate judge to output an answer not present in the candidate set')
+    parser.add_argument('--candidate_judge_include_caption_candidate', action='store_true',
+                        help='add an extra caption-only candidate answer in --cot_style candidate_judge')
+    parser.add_argument('--candidate_judge_route_evidence', action='store_true',
+                        help='route image/caption/knowledge enhancement by question type in --cot_style candidate_judge')
+    parser.add_argument('--candidate_judge_use_enhanced_image', action='store_true',
+                        help='let the candidate judge inspect the enhanced image instead of the original image when available')
+    parser.add_argument('--candidate_judge_include_count_candidate', action='store_true',
+                        help='add a counting-specialist candidate for count questions')
+    parser.add_argument('--candidate_judge_include_ocr_candidate', action='store_true',
+                        help='add an OCR/text-specialist candidate for text-reading questions')
+    parser.add_argument('--candidate_judge_include_coverage_candidate', action='store_true',
+                        help='add a full coverage scan candidate using regional/OCR/enhanced evidence')
+    parser.add_argument('--candidate_judge_include_contrast_candidate', action='store_true',
+                        help='add a contrastive alternative candidate to fight wrong consensus')
+    parser.add_argument('--strategy_name', type=str, default='default',
+                        help='strategy label written to --strategy_profile_output')
+    parser.add_argument('--strategy_profile_output', type=str, default='',
+                        help='append per-sample strategy correctness records to this JSONL file')
+    parser.add_argument('--strategy_profile_path', type=str, default='',
+                        help='combined JSONL strategy profile used by --cot_style rag_strategy_router')
+    parser.add_argument('--strategy_direct_name', type=str, default='direct',
+                        help='strategy-profile key for the direct baseline')
+    parser.add_argument('--strategy_cot_name', type=str, default='protected_reflective',
+                        help='strategy-profile key for the CoT/protected strategy')
+    parser.add_argument('--strategy_router_default', type=str, default='direct',
+                        help='fallback strategy when RAG evidence is weak')
+    parser.add_argument('--strategy_cot_runtime', type=str, default='protected_reflective',
+                        choices=['protected_reflective', 'answer_first_locked'],
+                        help='runtime behavior when rag_strategy_router selects the CoT strategy')
+    parser.add_argument('--strategy_retrieval_metric', type=str, default='imagequestion',
+                        choices=['question', 'imagequestion'],
+                        help='retrieval metric for strategy RAG router')
+    parser.add_argument('--strategy_topk', type=int, default=20,
+                        help='number of strategy-profile neighbors used by RAG router')
+    parser.add_argument('--strategy_min_neighbors', type=int, default=5,
+                        help='minimum available profiled neighbors before routing away from default')
+    parser.add_argument('--strategy_margin', type=float, default=0.12,
+                        help='minimum cot_avg - direct_avg needed to select CoT')
+    parser.add_argument('--strategy_min_rescue_rate', type=float, default=0.15,
+                        help='minimum neighbor rate where direct is wrong and CoT is right')
+    parser.add_argument('--strategy_max_damage_rate', type=float, default=0.10,
+                        help='maximum neighbor rate where direct is right and CoT is wrong')
+    parser.add_argument('--multi_strategy_names', type=str,
+                        default='direct,reflective_r3,answer_first_no_caption,marker_mcts',
+                        help='comma-separated strategy names available to --cot_style multi_strategy_router')
+    parser.add_argument('--multi_strategy_default', type=str, default='direct',
+                        help='default strategy for --cot_style multi_strategy_router')
+    parser.add_argument('--multi_strategy_margin', type=float, default=0.08,
+                        help='minimum best_strategy_avg - default_avg needed to route away from default')
     # ----caption策略
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')

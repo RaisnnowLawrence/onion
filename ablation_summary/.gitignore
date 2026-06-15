@@ -5,6 +5,16 @@ __pycache__/
 *.log
 *.out
 *.err
+*.bak
+*.csv
+*.tsv
+*_summary.md
+ablation_summary_*.md
+*_report.md
+*_diagnostic.md
+all_wrong_*.md
+remaining_*.md
+strategy_overlap_*.md
 
 logs/
 logs_*/
