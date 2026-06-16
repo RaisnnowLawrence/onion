@@ -63,18 +63,21 @@ class aokvqa_dataset:
         # 设置原始图像目录路径（如 .../val2017 或 .../test2017）
         self.raw_image_dir = os.path.join(self.args.raw_image_dir, "%s2017" % split)
 
+        val_anno_file = f'{args.coco_path}/aokvqa_v1p0_{split}.json'
+
         # 加载验证/测试集的标注数据
         # 返回元组: (_, 答案字典, 问题字典, 原理字典, 选项字典)
         _, self.answer_dict, self.question_dict, self.rationale_dict, self.choices_dict = \
             self.load_anno(
                 None,  # 不加载额外的标注文件
-                f'{args.coco_path}/aokvqa_v1p0_{split}.json',  # AOK-VQA问题文件
-                f'{args.coco_path}/aokvqa_v1p0_{split}.json',  # 同上（可能为占位）
+                val_anno_file,  # AOK-VQA问题文件
+                val_anno_file,  # 同上（可能为占位）
                 choice_only=args.choice_only  # 是否仅加载选择题
             )
         
         # 获取验证集的所有问题ID作为键
         self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = self.load_direct_answer_eval_keys(val_anno_file)
 
         ## 加载缓存的文本数据（COCO图像描述和标签）
         self.inputtext_dict = self.load_cachetext()
@@ -110,6 +113,19 @@ class aokvqa_dataset:
             train_ocr = args.ocr_train_file or os.path.join(args.sg_path, "coco17_ocr_train.json")
             val_ocr = args.ocr_val_file or os.path.join(args.sg_path, f"coco17_ocr_{split}.json")
             self.load_ocr(train_ocr, val_ocr, self.sg_attr_dir, thres=args.ocr_conf_threshold)
+
+    def load_direct_answer_eval_keys(self, anno_file):
+        """官方A-OKVQA DA评测只统计 difficult_direct_answer 为 False 的样本。"""
+        eval_keys = set()
+        try:
+            annotations = json.load(open(anno_file, 'r'))
+        except FileNotFoundError:
+            return eval_keys
+        for sample in annotations:
+            if sample.get('difficult_direct_answer') is False:
+                key = str(sample['image_id']) + '<->' + str(sample['question_id'])
+                eval_keys.add(key)
+        return eval_keys
 
     def load_ocr(self, train_ocr, val_ocr, sg_path, thres=0.2):
         if not os.path.isfile(train_ocr) or not os.path.isfile(val_ocr):

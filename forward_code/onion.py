@@ -38,6 +38,22 @@ def process_answer(answer):
     return ' '.join(answer_list)
 
 
+def official_direct_answer_score(pred_answer, direct_answers):
+    """A-OKVQA official DA score: exact match, min(1, matches / 3)."""
+    num_match = sum(str(pred_answer) == str(answer) for answer in direct_answers)
+    return min(1.0, num_match / 3.0)
+
+
+def legacy_normalized_direct_answer_score(pred_answer, direct_answers):
+    """Old internal score kept only for explicit backward-compatibility checks."""
+    processed_pred_answer = process_answer(pred_answer)
+    counter = 0
+    for answer in direct_answers:
+        if processed_pred_answer == process_answer(answer):
+            counter += 1
+    return min(1.0, float(counter) * 0.3)
+
+
 class onion:    
     def __init__(self, args, dataset):
 
@@ -126,6 +142,80 @@ class onion:
         cleaned = re.split(r"\s+(?:because|since|as|therefore)\s+", cleaned, maxsplit=1, flags=re.IGNORECASE)[0].strip()
         cleaned = cleaned.strip(" \t\"'`.,;:!?")
         return cleaned
+
+    def _safe_rule_postprocess_answer(self, answer):
+        import re
+
+        cleaned = str(answer).strip()
+        cleaned = cleaned.split("\n")[0].strip()
+        cleaned = re.sub(r"^(?:final\s+answer|answer)\s*:\s*", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"^the\s+answer\s+is\s+", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.split(r"\s+(?:because|since|as|therefore)\s+", cleaned, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        cleaned = cleaned.strip(" \t\"'`.,;:!?")
+        return cleaned
+
+    def _postprocess_answer(self, answer):
+        mode = getattr(self.args, "answer_postprocess", "none")
+        if mode == "none":
+            return answer
+        if mode == "safe_rules":
+            return self._safe_rule_postprocess_answer(answer)
+        if mode == "legacy_visualcot":
+            return process_answer(self._safe_rule_postprocess_answer(answer))
+        return answer
+
+    def _format_direct_answer_instruction(self, question, prompt_before_answer):
+        style = getattr(self.args, "direct_prompt_style", "default")
+        if style == "answer_first_strict":
+            return (
+                "=== Answer with only one word or a short noun phrase.\n"
+                "Do not explain. Do not write a full sentence. Do not add punctuation.\n"
+                "Answer:"
+            )
+        if style == "type_specialist":
+            qtype = self._classify_vqa_question_type(question)
+            if self._question_is_count(question):
+                constraint = "This is a counting question. Answer with a number only."
+            elif self._question_is_ocr(question):
+                constraint = "This is a text-reading question. Answer with the visible text only."
+            elif "color" in str(question).lower():
+                constraint = "This is a color question. Answer with color word(s) only."
+            elif qtype == "visual_detail":
+                constraint = "Answer with the directly visible detail as a short phrase."
+            elif qtype == "category":
+                constraint = "Answer with the object/category name as a short noun phrase."
+            elif qtype == "knowledge":
+                constraint = "Use the image first, then answer with the shortest plausible phrase."
+            else:
+                constraint = "Answer with a single word or short phrase."
+            return (
+                "=== %s\n"
+                "Do not explain. Do not write a full sentence.\n"
+                "Answer:"
+            ) % constraint
+        return (
+            "=== Please fill in the answer with a short phrase or a single word:\n"
+            "%s" % (prompt_before_answer)
+        )
+
+    def _build_direct_context_for_style(self, question, caption, regional_context, ocr_context):
+        if getattr(self.args, "direct_prompt_style", "default") != "context_gated":
+            return caption
+        parts = []
+        if self._question_is_ocr(question):
+            if ocr_context:
+                parts.append("OCR/Text evidence: " + ocr_context)
+            if regional_context:
+                parts.append(regional_context)
+        elif self._question_is_count(question) or "color" in str(question).lower():
+            if regional_context:
+                parts.append(regional_context)
+            if caption:
+                parts.append(caption)
+        else:
+            if caption:
+                parts.append(caption)
+        return "\n".join(part for part in parts if part)
 
     def _extract_structured_cot_answer(self, response):
         import re
@@ -447,8 +537,10 @@ class onion:
                 "damage_rate": 0.0,
             }
 
+        question_type = self._classify_vqa_question_type(question)
         topk = max(1, self.args.strategy_topk)
-        context_keys = self.get_context_keys(key, self.args.strategy_retrieval_metric, topk * 3)
+        context_multiplier = 6 if self.args.strategy_router_mode == "qtype_conditional" else 3
+        context_keys = self.get_context_keys(key, self.args.strategy_retrieval_metric, topk * context_multiplier)
         if not context_keys:
             context_keys = []
 
@@ -460,12 +552,21 @@ class onion:
             if not rec:
                 continue
             scores = rec.get("scores", {})
-            if direct_name not in scores or cot_name not in scores:
+            if direct_name not in scores:
                 continue
+            if self.args.strategy_router_mode != "direct_failure" and cot_name not in scores:
+                continue
+            if (
+                self.args.strategy_router_mode == "qtype_conditional"
+                and rec.get("question_type", "") != question_type
+            ):
+                continue
+            direct_score = float(scores.get(direct_name, 0.0))
+            cot_score = float(scores.get(cot_name, direct_score))
             neighbors.append({
                 "key": ctx_key,
-                "direct": float(scores.get(direct_name, 0.0)),
-                "cot": float(scores.get(cot_name, 0.0)),
+                "direct": direct_score,
+                "cot": cot_score,
                 "question_type": rec.get("question_type", ""),
             })
             if len(neighbors) >= topk:
@@ -484,25 +585,63 @@ class onion:
 
         direct_avg = sum(n["direct"] for n in neighbors) / len(neighbors)
         cot_avg = sum(n["cot"] for n in neighbors) / len(neighbors)
-        rescue = [n for n in neighbors if n["direct"] <= 0.0 and n["cot"] > 0.0]
-        damage = [n for n in neighbors if n["direct"] > 0.0 and n["cot"] <= 0.0]
+        direct_hard = [n for n in neighbors if n["direct"] <= self.args.strategy_direct_hard_threshold]
+        direct_safe = [n for n in neighbors if n["direct"] >= self.args.strategy_direct_safe_threshold]
+        rescue = [n for n in neighbors if n["direct"] <= self.args.strategy_direct_hard_threshold and n["cot"] > n["direct"]]
+        complex_win = [n for n in neighbors if n["direct"] <= self.args.strategy_direct_hard_threshold and n["cot"] >= self.args.strategy_direct_safe_threshold]
+        damage = [n for n in neighbors if n["direct"] >= self.args.strategy_direct_safe_threshold and n["cot"] <= self.args.strategy_direct_hard_threshold]
+        direct_hard_rate = len(direct_hard) / len(neighbors)
+        direct_safe_rate = len(direct_safe) / len(neighbors)
         rescue_rate = len(rescue) / len(neighbors)
+        complex_win_rate = len(complex_win) / len(neighbors)
         damage_rate = len(damage) / len(neighbors)
 
-        use_cot = (
-            cot_avg - direct_avg >= self.args.strategy_margin
-            and rescue_rate >= self.args.strategy_min_rescue_rate
-            and damage_rate <= self.args.strategy_max_damage_rate
-        )
+        mode = self.args.strategy_router_mode
+        if mode == "direct_failure":
+            use_cot = direct_hard_rate >= self.args.strategy_min_direct_hard_rate
+            reason = "direct_hard_neighbors" if use_cot else "direct_neighbors_safe"
+        elif mode == "direct_vs_complex":
+            use_cot = (
+                complex_win_rate >= self.args.strategy_min_complex_win_rate
+                or cot_avg - direct_avg >= self.args.strategy_margin
+            )
+            reason = "complex_win_neighbors" if use_cot else "direct_wins_neighbors"
+        elif mode == "qtype_conditional":
+            use_cot = (
+                complex_win_rate >= self.args.strategy_min_complex_win_rate
+                or (
+                    cot_avg - direct_avg >= self.args.strategy_margin
+                    and rescue_rate >= self.args.strategy_min_rescue_rate
+                )
+            )
+            reason = "qtype_complex_neighbors" if use_cot else "qtype_direct_neighbors"
+        elif mode == "conservative_risk":
+            net_gain = rescue_rate - damage_rate
+            use_cot = (
+                net_gain >= self.args.strategy_min_net_gain
+                and cot_avg - direct_avg >= self.args.strategy_margin
+                and damage_rate <= self.args.strategy_max_damage_rate
+            )
+            reason = "positive_rescue_damage_tradeoff" if use_cot else "direct_safer_by_risk"
+        else:
+            use_cot = (
+                cot_avg - direct_avg >= self.args.strategy_margin
+                and rescue_rate >= self.args.strategy_min_rescue_rate
+                and damage_rate <= self.args.strategy_max_damage_rate
+            )
+            reason = "cot_neighbors_win" if use_cot else "direct_default_or_safer"
+
         strategy = cot_name if use_cot else direct_name
-        reason = "cot_neighbors_win" if use_cot else "direct_default_or_safer"
         return {
             "strategy": strategy,
             "reason": reason,
             "neighbors": neighbors,
             "direct_avg": direct_avg,
             "cot_avg": cot_avg,
+            "direct_hard_rate": direct_hard_rate,
+            "direct_safe_rate": direct_safe_rate,
             "rescue_rate": rescue_rate,
+            "complex_win_rate": complex_win_rate,
             "damage_rate": damage_rate,
         }
 
@@ -758,6 +897,49 @@ class onion:
         if decomposed_norm and final_norm != decomposed_norm:
             return self._clean_short_answer(direct_answer)
         return self._clean_short_answer(final_answer)
+
+    def _run_complex_decompose_from_direct(self, question, choice_text, context,
+                                           direct_answer, question_type, image_path):
+        should_decompose = self._is_complex_for_decomposition(question)
+        decompose_prompt = ""
+        decompose_response = ""
+        verify_prompt = ""
+        verify_response = ""
+        decomposed_answer = ""
+        final_answer = self._clean_short_answer(direct_answer)
+
+        if should_decompose:
+            decompose_prompt = self._format_decompose_prompt(
+                question, choice_text, context, final_answer, question_type
+            )
+            decompose_response = self._call_llm(decompose_prompt, image_path=image_path)
+            decomposed_answer = self._clean_short_answer(
+                self._extract_structured_cot_answer(decompose_response)
+            )
+            if self._looks_like_visual_cue_list(decomposed_answer) or not decomposed_answer:
+                decomposed_answer = final_answer
+
+            if self.args.decompose_verify:
+                verify_prompt = self._format_decompose_verify_prompt(
+                    question, choice_text, context, final_answer,
+                    decomposed_answer, decompose_response
+                )
+                verify_response = self._call_llm(verify_prompt, image_path=image_path)
+                final_answer = self._extract_decompose_verify_answer(
+                    verify_response, final_answer, decomposed_answer
+                )
+            else:
+                final_answer = decomposed_answer
+
+        return {
+            "should_decompose": should_decompose,
+            "decompose_prompt": decompose_prompt,
+            "decompose_response": decompose_response,
+            "decomposed_answer": decomposed_answer,
+            "verify_prompt": verify_prompt,
+            "verify_response": verify_response,
+            "final_answer": final_answer,
+        }
 
     def _format_direct_verify_prompt(self, cur_caption, question, choice_text, initial_answer):
         policy_text = {
@@ -1936,6 +2118,10 @@ class onion:
                 cur_caption += '\n' + enhance_caption
             if self.args.use_knowledge_enhance and enhance_knowledge:
                 cur_caption += '\n' + enhance_knowledge
+            if self.args.direct_prompt_style == "context_gated":
+                cur_caption = self._build_direct_context_for_style(
+                    question, caption, regional_context, ocr_context
+                )
             prompt_context = direct_answer_context if self.args.cot_style == "reviewer_evidence" else cur_caption
 
             # 上下文参考
@@ -1956,8 +2142,7 @@ class onion:
                 else:
                     prompt += self._format_cot_answer_prompt(prompt_before_answer)
             else:
-                prompt += '=== Please fill in the answer with a short phrase or a single word:\n'
-                prompt += '%s' % (prompt_before_answer)
+                prompt += self._format_direct_answer_instruction(question, prompt_before_answer)
 
             print('-----sample_inference-----n_shot prompt-----+++++-----beg')
             print(prompt)
@@ -2064,7 +2249,38 @@ class onion:
                         route = self._route_with_strategy_profile(key, question)
                         selected_strategy = route["strategy"]
                         if selected_strategy == self.args.strategy_cot_name:
-                            if self.args.strategy_cot_runtime == "answer_first_locked":
+                            if self.args.strategy_cot_runtime == "complex_decompose":
+                                decomp = self._run_complex_decompose_from_direct(
+                                    question, choice_text, cur_caption, initial_answer,
+                                    question_type, answer_image_path
+                                )
+                                extracted_answer = decomp["final_answer"]
+                                response = (
+                                    "RAG Strategy Router: %s\n"
+                                    "Router Mode: %s\n"
+                                    "Route Stats: direct_avg=%.3f cot_avg=%.3f direct_hard_rate=%.3f "
+                                    "complex_win_rate=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
+                                    "Initial Direct Answer: %s\n"
+                                    "Should Decompose: %s\n"
+                                    "Decompose Prompt:\n%s\n"
+                                    "Decompose Response:\n%s\n"
+                                    "Decomposed Answer: %s\n"
+                                    "Verify Enabled: %s\n"
+                                    "Verify Prompt:\n%s\n"
+                                    "Verify Response:\n%s\n"
+                                    "Final Answer: %s"
+                                ) % (
+                                    selected_strategy, self.args.strategy_router_mode,
+                                    route.get("direct_avg", 0.0), route.get("cot_avg", 0.0),
+                                    route.get("direct_hard_rate", 0.0), route.get("complex_win_rate", 0.0),
+                                    route.get("rescue_rate", 0.0), route.get("damage_rate", 0.0),
+                                    route.get("reason", ""), initial_answer,
+                                    decomp["should_decompose"], decomp["decompose_prompt"],
+                                    decomp["decompose_response"], decomp["decomposed_answer"],
+                                    self.args.decompose_verify, decomp["verify_prompt"],
+                                    decomp["verify_response"], extracted_answer,
+                                )
+                            elif self.args.strategy_cot_runtime == "answer_first_locked":
                                 cot_prompt = self._format_candidate_prompt(
                                     question, choice_text, cur_caption, "answer_first_locked", question_type
                                 )
@@ -2072,14 +2288,17 @@ class onion:
                                 extracted_answer = self._extract_first_answer_line(cot_response)
                                 response = (
                                     "RAG Strategy Router: %s\n"
+                                    "Router Mode: %s\n"
                                     "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
                                     "Initial Direct Answer: %s\n"
                                     "CoT Prompt:\n%s\n"
                                     "CoT Response:\n%s\n"
                                     "Final Answer: %s"
                                 ) % (
-                                    selected_strategy, route["direct_avg"], route["cot_avg"], route["rescue_rate"],
-                                    route["damage_rate"], route["reason"], initial_answer, cot_prompt, cot_response,
+                                    selected_strategy, self.args.strategy_router_mode,
+                                    route.get("direct_avg", 0.0), route.get("cot_avg", 0.0),
+                                    route.get("rescue_rate", 0.0), route.get("damage_rate", 0.0),
+                                    route.get("reason", ""), initial_answer, cot_prompt, cot_response,
                                     extracted_answer,
                                 )
                             else:
@@ -2090,26 +2309,34 @@ class onion:
                                 extracted_answer = self._extract_protected_review_answer(review_response, initial_answer)
                                 response = (
                                     "RAG Strategy Router: %s\n"
+                                    "Router Mode: %s\n"
                                     "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
                                     "Initial Direct Answer: %s\n"
                                     "Protected Review Prompt:\n%s\n"
                                     "Protected Review Response:\n%s\n"
                                     "Final Answer: %s"
                                 ) % (
-                                    selected_strategy, route["direct_avg"], route["cot_avg"], route["rescue_rate"],
-                                    route["damage_rate"], route["reason"], initial_answer, review_prompt, review_response,
+                                    selected_strategy, self.args.strategy_router_mode,
+                                    route.get("direct_avg", 0.0), route.get("cot_avg", 0.0),
+                                    route.get("rescue_rate", 0.0), route.get("damage_rate", 0.0),
+                                    route.get("reason", ""), initial_answer, review_prompt, review_response,
                                     extracted_answer,
                                 )
                         else:
                             extracted_answer = initial_answer
                             response = (
                                 "RAG Strategy Router: %s\n"
-                                "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
+                                "Router Mode: %s\n"
+                                "Route Stats: direct_avg=%.3f cot_avg=%.3f direct_hard_rate=%.3f "
+                                "complex_win_rate=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
                                 "Initial Direct Response:\n%s\n"
                                 "Final Answer: %s"
                             ) % (
-                                selected_strategy, route["direct_avg"], route["cot_avg"], route["rescue_rate"],
-                                route["damage_rate"], route["reason"], response, extracted_answer,
+                                selected_strategy, self.args.strategy_router_mode,
+                                route.get("direct_avg", 0.0), route.get("cot_avg", 0.0),
+                                route.get("direct_hard_rate", 0.0), route.get("complex_win_rate", 0.0),
+                                route.get("rescue_rate", 0.0), route.get("damage_rate", 0.0),
+                                route.get("reason", ""), response, extracted_answer,
                             )
                     elif self.args.cot_style == "complex_decompose":
                         initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
@@ -2456,6 +2683,7 @@ class onion:
                 print("    REASON INF TIME", t3-t2)
                 print("    REASON POST TIME", t4-t3)
         maxval = -999.
+        pred_candidates = [self._postprocess_answer(candidate) for candidate in pred_candidates]
 
         if self.args.ensemble_strategy == "first":
             pred_answer = pred_candidates[0]
@@ -2485,14 +2713,10 @@ class onion:
                 pred_answer = self.choices_dict[key][sim.argmax().item()]
             final_score = 1 if pred_answer == self.choices_dict[key][answer] else 0
         else:
-            # ====================== 评分方式1：自定义分档（当前使用） ======================
-            counter = 0
-            processed_pred_answer = process_answer(pred_answer)
-            for ii in range(len(answer)):
-                if processed_pred_answer == process_answer(answer[ii]): counter += 1
-            final_score = min(1., float(counter) * 0.3)
-            # # ====================== 评分方式2：AOK-VQA标准评分（精确匹配任一标注者即得1分） ======================
-            # final_score = 1.0 if any(pred_answer == ans for ans in answer) else 0.0
+            if self.args.legacy_answer_normalization:
+                final_score = legacy_normalized_direct_answer_score(pred_answer, answer)
+            else:
+                final_score = official_direct_answer_score(pred_answer, answer)
         if self.args.debug:
             print(prompt)
             print(pred_answer)
@@ -3054,6 +3278,16 @@ def parser_args():
     parser.add_argument('--summary_log', type=str, default='', help="path to write accuracy summary line")
     # 实验类型-模型结构
     parser.add_argument('--choice_only', action='store_true')
+    parser.add_argument('--eval_all_direct_answers', action='store_true',
+                        help='internal analysis only: include difficult_direct_answer=True samples in DA aggregate')
+    parser.add_argument('--legacy_answer_normalization', action='store_true',
+                        help='internal analysis only: use the old normalized 0.3*match direct-answer score')
+    parser.add_argument('--answer_postprocess', type=str, default='none',
+                        choices=['none', 'safe_rules', 'legacy_visualcot'],
+                        help='optional prediction post-processing before scoring/voting')
+    parser.add_argument('--direct_prompt_style', type=str, default='default',
+                        choices=['default', 'answer_first_strict', 'type_specialist', 'context_gated'],
+                        help='direct-answer prompt/context variant used when --chain_of_thoughts is off')
     parser.add_argument('--chain_of_thoughts', action='store_true')
     parser.add_argument('--with_clip_verify', action='store_true')
     parser.add_argument('--use_clip_thought_verify', action='store_true',
@@ -3184,8 +3418,12 @@ def parser_args():
     parser.add_argument('--strategy_router_default', type=str, default='direct',
                         help='fallback strategy when RAG evidence is weak')
     parser.add_argument('--strategy_cot_runtime', type=str, default='protected_reflective',
-                        choices=['protected_reflective', 'answer_first_locked'],
+                        choices=['protected_reflective', 'answer_first_locked', 'complex_decompose'],
                         help='runtime behavior when rag_strategy_router selects the CoT strategy')
+    parser.add_argument('--strategy_router_mode', type=str, default='conservative_risk',
+                        choices=['direct_failure', 'direct_vs_complex', 'qtype_conditional',
+                                 'conservative_risk', 'legacy'],
+                        help='train-profile routing rule used by --cot_style rag_strategy_router')
     parser.add_argument('--strategy_retrieval_metric', type=str, default='imagequestion',
                         choices=['question', 'imagequestion'],
                         help='retrieval metric for strategy RAG router')
@@ -3195,10 +3433,20 @@ def parser_args():
                         help='minimum available profiled neighbors before routing away from default')
     parser.add_argument('--strategy_margin', type=float, default=0.12,
                         help='minimum cot_avg - direct_avg needed to select CoT')
+    parser.add_argument('--strategy_direct_hard_threshold', type=float, default=0.0,
+                        help='neighbor score at or below this is treated as direct-hard')
+    parser.add_argument('--strategy_direct_safe_threshold', type=float, default=0.6,
+                        help='neighbor score at or above this is treated as direct-safe / complex-win')
+    parser.add_argument('--strategy_min_direct_hard_rate', type=float, default=0.55,
+                        help='minimum direct-hard neighbor rate for direct_failure routing')
+    parser.add_argument('--strategy_min_complex_win_rate', type=float, default=0.20,
+                        help='minimum neighbor rate where complex clearly beats failed direct')
     parser.add_argument('--strategy_min_rescue_rate', type=float, default=0.15,
                         help='minimum neighbor rate where direct is wrong and CoT is right')
     parser.add_argument('--strategy_max_damage_rate', type=float, default=0.10,
                         help='maximum neighbor rate where direct is right and CoT is wrong')
+    parser.add_argument('--strategy_min_net_gain', type=float, default=0.08,
+                        help='minimum rescue_rate - damage_rate for conservative_risk routing')
     parser.add_argument('--multi_strategy_names', type=str,
                         default='direct,reflective_r3,answer_first_no_caption,marker_mcts',
                         help='comma-separated strategy names available to --cot_style multi_strategy_router')
@@ -3235,6 +3483,139 @@ def parser_args():
     return args
 
 
+def load_official_da_eval_keys(args):
+    anno_file = os.path.join(args.coco_path, f"aokvqa_v1p0_{args.split_name}.json")
+    try:
+        annotations = json.load(open(anno_file, "r"))
+    except FileNotFoundError:
+        return set()
+    return {
+        str(sample["image_id"]) + "<->" + str(sample["question_id"])
+        for sample in annotations
+        if sample.get("difficult_direct_answer") is False
+    }
+
+
+def load_direct_answer_annotations(args):
+    anno_file = os.path.join(args.coco_path, f"aokvqa_v1p0_{args.split_name}.json")
+    try:
+        annotations = json.load(open(anno_file, "r"))
+    except FileNotFoundError:
+        return {}, set()
+    answer_by_key = {}
+    official_keys = set()
+    for sample in annotations:
+        key = str(sample["image_id"]) + "<->" + str(sample["question_id"])
+        answer_by_key[key] = sample.get("direct_answers", [])
+        if sample.get("difficult_direct_answer") is False:
+            official_keys.add(key)
+    return answer_by_key, official_keys
+
+
+def direct_answer_eval_report(args, answers):
+    if args.choice_only:
+        acc = sum(float(a[3]) for a in answers) if answers else 0.0
+        total = len(answers)
+        pct = acc * 100.0 / total if total else 0.0
+        return {
+            "primary_label": "MC准确率",
+            "primary_pct": pct,
+            "primary_sum": acc,
+            "primary_total": total,
+            "lines": [f"MC准确率: {pct:.2f}% ({acc:.2f}/{total})"],
+        }
+
+    answer_by_key, official_keys = load_direct_answer_annotations(args)
+    official_scores = []
+    legacy_official_scores = []
+    official_exact_full_scores = []
+    legacy_all_scores = []
+
+    for a in answers:
+        key = a[0]
+        pred = a[1]
+        gold = answer_by_key.get(key)
+        if gold is None:
+            continue
+        official_score = official_direct_answer_score(pred, gold)
+        legacy_score = legacy_normalized_direct_answer_score(pred, gold)
+        official_exact_full_scores.append(official_score)
+        legacy_all_scores.append(legacy_score)
+        if key in official_keys:
+            official_scores.append(official_score)
+            legacy_official_scores.append(legacy_score)
+
+    def _summarize(scores):
+        total = len(scores)
+        score_sum = sum(scores)
+        pct = score_sum * 100.0 / total if total else 0.0
+        return pct, score_sum, total
+
+    official_pct, official_sum, official_total = _summarize(official_scores)
+    legacy_official_pct, legacy_official_sum, legacy_official_total = _summarize(legacy_official_scores)
+    official_full_pct, official_full_sum, official_full_total = _summarize(official_exact_full_scores)
+    legacy_full_pct, legacy_full_sum, legacy_full_total = _summarize(legacy_all_scores)
+
+    primary_label = "官方DA准确率"
+    if args.eval_all_direct_answers:
+        primary_label = "全量官方exact诊断"
+        primary_pct, primary_sum, primary_total = official_full_pct, official_full_sum, official_full_total
+    else:
+        primary_pct, primary_sum, primary_total = official_pct, official_sum, official_total
+
+    return {
+        "primary_label": primary_label,
+        "primary_pct": primary_pct,
+        "primary_sum": primary_sum,
+        "primary_total": primary_total,
+        "official_pct": official_pct,
+        "official_sum": official_sum,
+        "official_total": official_total,
+        "legacy_official_pct": legacy_official_pct,
+        "legacy_official_sum": legacy_official_sum,
+        "legacy_official_total": legacy_official_total,
+        "official_full_pct": official_full_pct,
+        "official_full_sum": official_full_sum,
+        "official_full_total": official_full_total,
+        "legacy_full_pct": legacy_full_pct,
+        "legacy_full_sum": legacy_full_sum,
+        "legacy_full_total": legacy_full_total,
+        "lines": [
+            f"官方DA准确率: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
+            f"旧指标@官方DA子集: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
+            f"全量官方exact诊断: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
+            f"旧指标@全量诊断: {legacy_full_pct:.2f}% ({legacy_full_sum:.2f}/{legacy_full_total})",
+        ],
+    }
+
+
+def official_da_eval_answers(args, answers):
+    if args.choice_only or args.eval_all_direct_answers:
+        eval_answers = answers
+        label = "全量准确率"
+    else:
+        eval_keys = load_official_da_eval_keys(args)
+        eval_answers = [a for a in answers if a[0] in eval_keys]
+        label = "官方DA准确率"
+    if not eval_answers:
+        return 0.0, 0.0, 0, label
+    acc = sum(float(a[3]) for a in eval_answers)
+    return acc * 100.0 / len(eval_answers), acc, len(eval_answers), label
+
+
+def write_official_prediction_file(args, answers, output_dir, output_name):
+    predictions = {}
+    for a in answers:
+        qid = a[0].split('<->')[1] if '<->' in a[0] else a[0]
+        if args.choice_only:
+            predictions[qid] = {"multiple_choice": a[1]}
+        else:
+            predictions[qid] = {"direct_answer": a[1]}
+    out_path = os.path.join(output_dir, f"predictions_{args.split_name}_{output_name}")
+    json.dump(predictions, open(out_path, "w"))
+    print(f"[merge] official prediction 已保存: {out_path}")
+
+
 def merge_results(args):
     """汇总多shard的逐样本推理结果，计算全量准确率并生成最终JSON。"""
     import glob
@@ -3263,19 +3644,19 @@ def merge_results(args):
             with open(format_fpath) as f:
                 full_answers.append(json.load(f))
 
-    # 计算全量准确率
-    acc = sum(float(a[3]) for a in answers)
-    total = len(answers)
-    acc_pct = acc * 100.0 / total
+    report = direct_answer_eval_report(args, answers)
+    acc_pct = report["primary_pct"]
 
     print(f"\n{'='*50}")
-    print(f"全量准确率: {acc_pct:.2f}% ({int(acc)}/{total})")
+    for line in report["lines"]:
+        print(line)
     print(f"{'='*50}\n")
 
     # 如果指定了summary_log，将准确率写入汇总日志
     if args.summary_log:
         with open(args.summary_log, 'a') as f:
-            f.write(f"全量准确率: {acc_pct:.2f}% ({int(acc)}/{total})\n")
+            for line in report["lines"]:
+                f.write(line + "\n")
 
     # 生成合并后的最终JSON
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3300,6 +3681,7 @@ def merge_results(args):
 
     json.dump(format_prediction, open(os.path.join(format_answer_dir, output_name), 'w'))
     print(f"[merge] format_answer 已保存: {format_answer_dir}/{output_name}")
+    write_official_prediction_file(args, answers, format_answer_dir, output_name)
 
 
 def main():
@@ -3326,10 +3708,8 @@ def main():
     answers, full_answers = aokvqa_onion.inference(save_every_step = True)
 
     prediction = {}
-    acc = 0.
     for answer in answers:
         prediction[answer[0]] = [answer[1], answer[2]]
-        acc += float(answer[3])
 
     format_prediction = []
     for answer in answers:
@@ -3339,8 +3719,10 @@ def main():
         else:
             format_prediction.append({"answer": answer[1], "question_id": answer[0].split('<->')[1]})
 
-    print("acc:", acc * 100. / len(answers), len(answers))
-    acc = acc * 100. / len(answers)
+    report = direct_answer_eval_report(args, answers)
+    acc = report["primary_pct"]
+    for line in report["lines"]:
+        print(line)
 
     ## if save final predictions
     # 获取当前日期时间戳
@@ -3353,6 +3735,7 @@ def main():
     output_name = 'VisualCOT_%s_n%d_repeat%d_%s_%f.json' % (args.caption_type, args.n_shot, args.n_ensemble, args.similarity_metric, acc)
     json.dump(full_answers, open("%s/prompt_answer_%s/%s" % (args.output_path, date_str, output_name), 'w'))
     json.dump(format_prediction, open("%s/format_answer_%s/%s" % (args.output_path, date_str, output_name), 'w'))
+    write_official_prediction_file(args, answers, "%s/format_answer_%s" % (args.output_path, date_str), output_name)
 
 if __name__ == '__main__':
     main()
