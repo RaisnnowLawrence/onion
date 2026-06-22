@@ -12,6 +12,8 @@ The main research question is:
 
 > Can VisualCoT-style iterative reasoning, image enhancement, caption/context enhancement, knowledge enhancement, MCTS/SAM, or reviewer-style CoT improve A-OKVQA accuracy over a strong direct-answer baseline?
 
+The latest roadmap also adds a NoteMR-inspired direction: replace the current weak model-generated `knowledge_enhance` with a two-stage `retrieval -> Knowledge Notes -> final answer` pipeline, first as a hard-case / knowledge-question candidate generator.
+
 The current empirical answer is nuanced:
 
 - Direct no-CoT is very strong.

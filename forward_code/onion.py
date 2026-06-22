@@ -8,6 +8,7 @@ import time
 import torch
 import random
 import openai
+import re
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
 import pdb
@@ -25,9 +26,10 @@ from lang_sam import LangSAM
 
 from sam_utils import process_langsam_results_to_visualization, combine_masks_max_simple, clean_string_basic
 
-from aokvqa_utils import aokvqa_dataset
+from aokvqa_utils import aokvqa_dataset, okvqa_dataset
 from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible
 from mcts import MCTSQuestionSample
+from official_vqa_answer_processor import normalize_vqa_answer
 
 
 def process_answer(answer):
@@ -39,8 +41,9 @@ def process_answer(answer):
 
 
 def official_direct_answer_score(pred_answer, direct_answers):
-    """A-OKVQA official DA score: exact match, min(1, matches / 3)."""
-    num_match = sum(str(pred_answer) == str(answer) for answer in direct_answers)
+    """Official VQA-style DA score after answer normalization: min(1, matches / 3)."""
+    normalized_pred = normalize_vqa_answer(pred_answer)
+    num_match = sum(normalized_pred == normalize_vqa_answer(answer) for answer in direct_answers)
     return min(1.0, num_match / 3.0)
 
 
@@ -63,6 +66,8 @@ class onion:
         self.attention_object = []
         self.qwen_global_caption_cache = {}
         self.qwen_local_caption_cache = {}
+        self.external_knowledge_corpus = None
+        self.external_knowledge_index = None
         self.strategy_profile = {}
         self.val_ocr_text = getattr(dataset, "val_ocr_text", {})
         self.train_ocr_text = getattr(dataset, "train_ocr_text", {})
@@ -216,6 +221,245 @@ class onion:
             if caption:
                 parts.append(caption)
         return "\n".join(part for part in parts if part)
+
+    def _parse_rephrased_questions(self, response, original_question):
+        import re
+
+        questions = []
+        seen = {str(original_question).strip().lower()}
+        for line in str(response).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^\s*(?:[-*]|\d+[\).:])\s*", "", line).strip()
+            line = line.strip("\"'")
+            if not line or line.lower().startswith(("question", "rephrase")):
+                continue
+            if not line.endswith("?") and "?" in line:
+                line = line[:line.find("?") + 1]
+            norm = line.lower()
+            if norm in seen:
+                continue
+            questions.append(line)
+            seen.add(norm)
+            if len(questions) >= self.args.rephrase_num_questions:
+                break
+        return questions
+
+    def _format_rephrase_generation_prompt(self, question, question_type):
+        mode = self.args.rephrase_generation_mode
+        if mode == "visual_focus":
+            instruction = (
+                "Make the visual target and relation clearer, while preserving exactly the same meaning. "
+                "Do not add any new assumption."
+            )
+        elif mode == "answer_type":
+            instruction = (
+                "Rewrite the question so the expected answer type is explicit, such as number, color, object, place, text, or action. "
+                "Do not change what is being asked."
+            )
+        elif mode == "mixed":
+            instruction = (
+                "Produce diverse but semantically equivalent rewrites: one simpler, one visual-target focused, "
+                "and one answer-type focused when possible."
+            )
+        else:
+            instruction = "Make the question simpler and clearer without changing its meaning."
+        return (
+            "Rewrite the visual question into %d semantically equivalent questions.\n"
+            "%s\n"
+            "The rewrites must ask for the same answer as the original question.\n"
+            "Do not answer the question. Do not add choices. Output one question per line.\n"
+            "Question type: %s\n"
+            "Original question: %s"
+        ) % (self.args.rephrase_num_questions, instruction, question_type, question)
+
+    def _format_rephrase_direct_prompt(self, question, choice_text, context):
+        prompt = (
+            "Answer the visual question with a single word or short phrase.\n"
+            "Do not explain. Do not write a full sentence.\n"
+        )
+        if context:
+            prompt += "Brief Context: %s\n" % self._truncate_text(context, self.args.rephrase_context_max_chars)
+        prompt += "Question: %s%s\nAnswer:" % (question, choice_text)
+        return prompt
+
+    def _rephrase_context(self, cur_caption, regional_context, ocr_context):
+        mode = self.args.rephrase_answer_context
+        if mode == "empty":
+            return ""
+        if mode == "regional":
+            return "\n".join(part for part in (cur_caption, regional_context) if part)
+        if mode == "ocr_regional":
+            return "\n".join(part for part in (cur_caption, regional_context, ocr_context) if part)
+        return cur_caption
+
+    def _question_rephrase_should_trigger(self, question, question_type):
+        trigger = self.args.rephrase_trigger
+        if trigger == "always":
+            return True
+        if trigger == "risky_qtype":
+            return (
+                self._question_is_count(question)
+                or self._question_is_ocr(question)
+                or "color" in str(question).lower()
+                or question_type in ("visual_detail", "category")
+            )
+        if trigger == "complex_qtype":
+            return question_type in ("knowledge", "visual_detail", "category")
+        return True
+
+    def _rephrase_vote_proposal(self, initial_answer, answer_records):
+        normalized_counts = {}
+        norm_to_answer = {}
+        for rec in answer_records:
+            answer = self._clean_short_answer(rec.get("answer", ""))
+            if not answer or self._looks_like_visual_cue_list(answer):
+                continue
+            norm = process_answer(answer)
+            normalized_counts[norm] = normalized_counts.get(norm, 0) + 1
+            norm_to_answer.setdefault(norm, answer)
+        if not normalized_counts:
+            return "", "", 0, normalized_counts
+        initial_norm = process_answer(initial_answer)
+        best_norm = max(normalized_counts, key=normalized_counts.get)
+        best_votes = normalized_counts[best_norm]
+        if best_norm != initial_norm and best_votes >= self.args.rephrase_consensus_threshold:
+            return norm_to_answer[best_norm], best_norm, best_votes, normalized_counts
+        return "", best_norm, best_votes, normalized_counts
+
+    def _format_rephrase_review_prompt(self, original_question, choice_text, context, initial_answer,
+                                       rephrase_questions, answer_records, proposed_answer):
+        qa_lines = []
+        for rec in answer_records:
+            qa_lines.append("Q: %s\nA: %s" % (rec.get("question", ""), rec.get("answer", "")))
+        return (
+            "You are conservatively checking whether question rephrasing found a better short answer.\n"
+            "The original direct answer is usually safer. Revise only if the rephrased questions are semantically equivalent "
+            "and the proposed answer is clearly better supported by the image.\n"
+            "If uncertain, keep the original answer.\n"
+            "Brief Context: %s\n"
+            "Original Question: %s%s\n"
+            "Original Direct Answer: %s\n"
+            "Rephrased QA:\n%s\n"
+            "Proposed Answer: %s\n"
+            "Output exactly:\n"
+            "Decision: keep / revise\n"
+            "Final Answer: <short answer>"
+        ) % (
+            self._truncate_text(context, self.args.rephrase_context_max_chars),
+            original_question,
+            choice_text,
+            self._clean_short_answer(initial_answer),
+            "\n---\n".join(qa_lines),
+            self._clean_short_answer(proposed_answer),
+        )
+
+    def _extract_rephrase_review_answer(self, response, initial_answer, proposed_answer):
+        import re
+
+        text = str(response).strip()
+        first_lines = "\n".join(text.splitlines()[:3]).lower()
+        if "revise" not in first_lines:
+            return self._clean_short_answer(initial_answer)
+        matches = re.findall(r"final\s+answer\s*:\s*(.+)", text, flags=re.IGNORECASE)
+        if matches:
+            answer = self._clean_short_answer(matches[-1])
+        else:
+            answer = self._clean_short_answer(proposed_answer)
+        if not answer or self._looks_like_visual_cue_list(answer):
+            return self._clean_short_answer(initial_answer)
+        return answer
+
+    def _run_rephrase_consistency(self, question, choice_text, cur_caption, regional_context, ocr_context,
+                                  initial_answer, question_type, image_path):
+        if not self._question_rephrase_should_trigger(question, question_type):
+            return {
+                "final_answer": self._clean_short_answer(initial_answer),
+                "trace": "Rephrase Consistency skipped by trigger %s.\nFinal Answer: %s" % (
+                    self.args.rephrase_trigger, self._clean_short_answer(initial_answer)
+                ),
+            }
+
+        rephrase_prompt = self._format_rephrase_generation_prompt(question, question_type)
+        rephrase_response = self._call_llm(
+            rephrase_prompt, image_path=None, max_new_tokens=self.args.rephrase_generation_max_tokens
+        )
+        rephrased_questions = self._parse_rephrased_questions(rephrase_response, question)
+        context = self._rephrase_context(cur_caption, regional_context, ocr_context)
+        answer_records = []
+        for rq in rephrased_questions:
+            direct_prompt = self._format_rephrase_direct_prompt(rq, choice_text, context)
+            direct_response = self._call_llm(
+                direct_prompt, image_path=image_path, max_new_tokens=self.args.rephrase_answer_max_tokens
+            )
+            answer_records.append({
+                "question": rq,
+                "prompt": direct_prompt,
+                "response": direct_response,
+                "answer": self._clean_short_answer(self._extract_answer_from_response(direct_response)),
+            })
+
+        proposed_answer, best_norm, best_votes, vote_counts = self._rephrase_vote_proposal(
+            initial_answer, answer_records
+        )
+        final_answer = self._clean_short_answer(initial_answer)
+        review_prompt = ""
+        review_response = ""
+        arbitration = self.args.rephrase_arbitration
+
+        if arbitration == "keep_baseline":
+            final_answer = self._clean_short_answer(initial_answer)
+        elif arbitration == "majority_if_consensus":
+            if proposed_answer:
+                final_answer = self._clean_short_answer(proposed_answer)
+        elif arbitration == "all_agree":
+            if proposed_answer and best_votes >= max(1, len(answer_records)):
+                final_answer = self._clean_short_answer(proposed_answer)
+        elif arbitration == "conservative_review":
+            if proposed_answer:
+                review_prompt = self._format_rephrase_review_prompt(
+                    question, choice_text, context, initial_answer,
+                    rephrased_questions, answer_records, proposed_answer
+                )
+                review_response = self._call_llm(
+                    review_prompt, image_path=image_path, max_new_tokens=self.args.rephrase_review_max_tokens
+                )
+                final_answer = self._extract_rephrase_review_answer(
+                    review_response, initial_answer, proposed_answer
+                )
+
+        trace = (
+            "Rephrase Consistency\n"
+            "Trigger: %s\n"
+            "Generation Mode: %s\n"
+            "Arbitration: %s\n"
+            "Initial Answer: %s\n"
+            "Rephrase Prompt:\n%s\n"
+            "Rephrase Response:\n%s\n"
+            "Answer Records:\n%s\n"
+            "Vote Counts: %s\n"
+            "Proposed Answer: %s (norm=%s votes=%s)\n"
+            "Review Prompt:\n%s\n"
+            "Review Response:\n%s\n"
+            "Final Answer: %s"
+        ) % (
+            self.args.rephrase_trigger,
+            self.args.rephrase_generation_mode,
+            arbitration,
+            self._clean_short_answer(initial_answer),
+            rephrase_prompt,
+            rephrase_response,
+            json.dumps(answer_records, ensure_ascii=False, indent=2),
+            json.dumps(vote_counts, ensure_ascii=False),
+            proposed_answer,
+            best_norm,
+            best_votes,
+            review_prompt,
+            review_response,
+            final_answer,
+        )
+        return {"final_answer": final_answer, "trace": trace, "answer_records": answer_records}
 
     def _extract_structured_cot_answer(self, response):
         import re
@@ -1215,7 +1459,8 @@ class onion:
 
     def _format_cot_answer_prompt(self, prompt_before_answer):
         if self.args.cot_style in ("direct_verify", "reviewer_evidence", "candidate_judge", "rag_strategy_router",
-                                   "protected_reflective", "multi_strategy_router"):
+                                   "protected_reflective", "multi_strategy_router",
+                                   "direct_rephrase_consistency"):
             return (
                 "=== Please answer directly with a single word or short phrase:\n"
                 "%s" % (prompt_before_answer)
@@ -1502,6 +1747,19 @@ class onion:
 
         # # 短测试代码
         # i = 0
+        shard_keys = [
+            key for idx, key in enumerate(self.dataset.val_keys)
+            if idx % self.args.num_shards == self.args.shard_id
+        ]
+        print(
+            "[shard] shard_id=%s num_shards=%s assigned_samples=%s total_samples=%s"
+            % (
+                self.args.shard_id,
+                self.args.num_shards,
+                len(shard_keys),
+                len(self.dataset.val_keys),
+            )
+        )
         
         for idx, key in enumerate(tqdm(self.dataset.val_keys)):
 
@@ -1517,7 +1775,11 @@ class onion:
             # 如果已保存该样本结果则跳过
             if save_every_step:
                 # 这里没有修改关于时间戳的内容
-                out_file_name = "%s/prompt_samples/sample_%s_*.json" % (self.args.output_path, str(idx))
+                out_file_name = "%s/prompt_samples/sample_%s_shard%s_*.json" % (
+                    self.args.output_path,
+                    str(idx),
+                    str(self.args.shard_id),
+                )
                 print(out_file_name)
                 out_file_list = glob.glob(out_file_name)
                 if len(out_file_list) > 0:
@@ -1558,10 +1820,10 @@ class onion:
             print(acc * 100. / len(answers), len(answers))
             # 保存最新推理结果到json文件
             if save_every_step:
-                json.dump(answers[-1], open("%s/prompt_samples/sample_%s_%s.json" % \
-                                            (self.args.output_path, str(idx), str(float(answers[-1][3]))), 'w'))
-                json.dump(full_answers[-1], open("%s/format_samples/sample_%s_%s.json" % \
-                                            (self.args.output_path, str(idx), str(float(answers[-1][3]))), 'w'))
+                json.dump(answers[-1], open("%s/prompt_samples/sample_%s_shard%s_%s.json" % \
+                                            (self.args.output_path, str(idx), str(self.args.shard_id), str(float(answers[-1][3]))), 'w'))
+                json.dump(full_answers[-1], open("%s/format_samples/sample_%s_shard%s_%s.json" % \
+                                            (self.args.output_path, str(idx), str(self.args.shard_id), str(float(answers[-1][3]))), 'w'))
             
             # # 短测试代码
             # i += 1
@@ -1977,6 +2239,11 @@ class onion:
             effective_use_caption_enhance = False
             effective_use_knowledge_enhance = False
         selective_mode = self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective"
+        knowledge_triggered = onion_instruction[0] == 'knowledge' or selective_mode
+        if self.args.knowledge_enhance_trigger == "always":
+            knowledge_triggered = True
+        elif self.args.knowledge_enhance_trigger == "knowledge_qtype":
+            knowledge_triggered = question_type in ("knowledge", "category")
         
         # ========== 三个核心增强模块（由args控制开关） ==========
         if effective_use_image_enhance and onion_instruction[0] == 'image':
@@ -1990,7 +2257,7 @@ class onion:
             print('-----enhance_caption-----强化的针对目标描述-----+++++-----end')
             print()
 
-        if effective_use_knowledge_enhance and (onion_instruction[0] == 'knowledge' or selective_mode):
+        if effective_use_knowledge_enhance and knowledge_triggered:
             enhance_knowledge = self.enhance_knowledge_object(data_row, onion_instruction[1], attr_list)
             print('-----enhance_knowledge-----强化的针对目标知识-----+++++-----beg')
             print('enhance_knowledge:', enhance_knowledge)
@@ -2001,7 +2268,7 @@ class onion:
         print('onion_instruction:', onion_instruction)
         if effective_use_caption_enhance and (onion_instruction[0] == 'caption' or selective_mode):
             print('enhance_caption:', enhance_caption)
-        if effective_use_knowledge_enhance and (onion_instruction[0] == 'knowledge' or selective_mode):
+        if effective_use_knowledge_enhance and knowledge_triggered:
             print('enhance_knowledge:', enhance_knowledge)
         print('-----onion_instruction-----类别输出指示-----+++++-----end')
         print()
@@ -2395,6 +2662,14 @@ class onion:
                             verify_response,
                             extracted_answer,
                         )
+                    elif self.args.cot_style == "direct_rephrase_consistency":
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        rephrase_result = self._run_rephrase_consistency(
+                            question, choice_text, cur_caption, regional_context, ocr_context,
+                            initial_answer, question_type, answer_image_path
+                        )
+                        extracted_answer = rephrase_result["final_answer"]
+                        response = rephrase_result["trace"]
                     elif self.args.cot_style == "candidate_judge":
                         selected_objects = onion_instruction[1] if len(onion_instruction) > 1 else []
                         initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
@@ -2992,6 +3267,7 @@ class onion:
         # 获取样本信息
         image_path = data_row['image_path']
         key = data_row['key']
+        question = data_row['question']
 
         # 如果是补充list，则补充并且去重
         _, selected_objects = self.init_attention_object(key, attr_list, image_path, ban_option=[])
@@ -3000,25 +3276,234 @@ class onion:
         self.attention_object = list(dict.fromkeys(self.attention_object + obj_list))
         obj_list = list(dict.fromkeys(self.attention_object + obj_list))
 
-        # # wit查询相关知识
-        # knowledge = ''
-        # for obj in obj_list:
-        #     knowledge += obj + ': '  # 添加标题分隔符
-        #     if obj in self.wit_knowkedge:
-        #         # 将列表中的多个描述合并成一个字符串
-        #         descriptions = ' '.join(self.wit_knowkedge[obj])  # 用空格连接多个描述
-        #         knowledge += descriptions
-        #     knowledge += '\n'
+        mode = self.args.knowledge_notes_mode
+        if mode == "legacy":
+            return self._legacy_generate_knowledge(data_row, obj_list, image_path)
 
-        # 模型补充知识
+        retrieved_items = []
+        if mode in ("raw_retrieved", "notes", "hybrid"):
+            retrieved_items = self.retrieve_knowledge_notes_candidates(question, obj_list)
+
+        if mode == "raw_retrieved":
+            knowledge = self._format_retrieved_knowledge(retrieved_items, self.args.knowledge_raw_max_chars)
+            if not knowledge and self.args.knowledge_notes_fallback_legacy:
+                knowledge = self._legacy_generate_knowledge(data_row, obj_list, image_path)
+            return knowledge
+
+        if mode == "retrieval_free":
+            return self.generate_knowledge_notes(
+                question=question,
+                image_path=image_path,
+                obj_list=obj_list,
+                retrieved_knowledge="",
+                retrieval_free=True,
+            )
+
+        retrieved_text = self._format_retrieved_knowledge(retrieved_items, self.args.knowledge_raw_max_chars)
+        if not retrieved_text and self.args.knowledge_notes_fallback_legacy:
+            return self._legacy_generate_knowledge(data_row, obj_list, image_path)
+
+        notes = self.generate_knowledge_notes(
+            question=question,
+            image_path=image_path,
+            obj_list=obj_list,
+            retrieved_knowledge=retrieved_text,
+            retrieval_free=False,
+        )
+
+        if mode == "hybrid" and retrieved_text:
+            return "Knowledge Notes: %s\nRetrieved Knowledge: %s" % (
+                self._truncate_text(notes, self.args.knowledge_notes_max_chars),
+                self._truncate_text(retrieved_text, self.args.knowledge_raw_max_chars),
+            )
+        return notes
+
+    def _legacy_generate_knowledge(self, data_row, obj_list, image_path):
+        # 模型补充知识：保留原始 onion 行为，作为兼容 baseline。
         prompt = 'I am giving you a question, an image, and some supplementary information, but you do not need to answer it.\n'
         prompt += 'Please supplement additional knowledge about the specified target based on the question and image I provide, rather than information already present in the image.\n'
         prompt += 'Object: %s\n' % str(obj_list)
 
         response = self._call_llm(prompt, image_path=image_path)
-        knowledge = response
+        return response
 
-        return knowledge
+    def _knowledge_tokenize(self, text):
+        return set(re.findall(r"[a-z0-9]+", str(text).lower()))
+
+    def _knowledge_record_text(self, record):
+        if isinstance(record, str):
+            return record
+        if isinstance(record, dict):
+            title = str(record.get("title") or record.get("name") or record.get("key") or "").strip()
+            text = str(record.get("text") or record.get("contents") or record.get("description") or record.get("passage") or "").strip()
+            if title and text:
+                return "%s: %s" % (title, text)
+            return title or text
+        if isinstance(record, (list, tuple)):
+            return " ".join(str(x) for x in record)
+        return str(record)
+
+    def _load_external_knowledge_corpus(self):
+        if self.external_knowledge_corpus is not None:
+            return self.external_knowledge_corpus
+
+        corpus = []
+        path = self.args.knowledge_corpus_file
+        if not path:
+            self.external_knowledge_corpus = corpus
+            self.external_knowledge_index = []
+            return corpus
+
+        if not os.path.isfile(path):
+            print(f"[knowledge_notes] missing external corpus file, skip: {path}")
+            self.external_knowledge_corpus = corpus
+            self.external_knowledge_index = []
+            return corpus
+
+        def add_record(key, value):
+            if isinstance(value, list):
+                text = " ".join(str(x) for x in value)
+            else:
+                text = self._knowledge_record_text(value)
+            text = text.strip()
+            if text:
+                corpus.append({"title": str(key), "text": text})
+
+        try:
+            if path.endswith(".jsonl"):
+                with open(path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        item = json.loads(line)
+                        text = self._knowledge_record_text(item).strip()
+                        if text:
+                            corpus.append(item if isinstance(item, dict) else {"text": text})
+            elif path.endswith(".json"):
+                data = json.load(open(path, "r"))
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        add_record(key, value)
+                elif isinstance(data, list):
+                    for item in data:
+                        text = self._knowledge_record_text(item).strip()
+                        if text:
+                            corpus.append(item if isinstance(item, dict) else {"text": text})
+            else:
+                with open(path, "r") as f:
+                    for line_id, line in enumerate(f):
+                        text = line.strip()
+                        if text:
+                            corpus.append({"title": str(line_id), "text": text})
+        except Exception as e:
+            print(f"[knowledge_notes] failed to load corpus {path}: {e}")
+            corpus = []
+
+        self.external_knowledge_corpus = corpus
+        self.external_knowledge_index = [
+            self._knowledge_tokenize(self._knowledge_record_text(record)) for record in corpus
+        ]
+        print(f"[knowledge_notes] loaded external corpus: {path}, records={len(corpus)}")
+        return corpus
+
+    def retrieve_knowledge_notes_candidates(self, question, obj_list):
+        candidates = []
+        seen = set()
+        query_terms = self._knowledge_tokenize(question)
+        object_terms = []
+        for obj in obj_list:
+            object_terms.extend(sorted(self._knowledge_tokenize(obj)))
+        query_terms.update(object_terms)
+
+        if self.args.knowledge_use_wit:
+            for obj in obj_list:
+                obj_key = str(obj).strip()
+                values = self.wit_knowkedge.get(obj_key) or self.wit_knowkedge.get(obj_key.lower())
+                if not values:
+                    continue
+                text = " ".join(str(x) for x in values) if isinstance(values, list) else str(values)
+                text = text.strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    candidates.append({"source": "wit", "title": obj_key, "text": text, "score": 999})
+
+        corpus = self._load_external_knowledge_corpus()
+        scored = []
+        if corpus and self.args.knowledge_retrieval_mode in ("lexical", "hybrid"):
+            for idx, record in enumerate(corpus):
+                record_text = self._knowledge_record_text(record)
+                terms = self.external_knowledge_index[idx] if self.external_knowledge_index else self._knowledge_tokenize(record_text)
+                overlap = len(query_terms & terms)
+                object_overlap = sum(1 for term in object_terms if term in terms)
+                score = overlap + object_overlap * 2
+                if score <= 0:
+                    continue
+                scored.append((score, idx, record_text))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for score, idx, text in scored[: self.args.knowledge_top_k]:
+                if text and text not in seen:
+                    seen.add(text)
+                    title = corpus[idx].get("title", str(idx)) if isinstance(corpus[idx], dict) else str(idx)
+                    candidates.append({"source": "corpus", "title": title, "text": text, "score": score})
+
+        return candidates[: self.args.knowledge_top_k]
+
+    def _format_retrieved_knowledge(self, retrieved_items, max_chars):
+        lines = []
+        for i, item in enumerate(retrieved_items, start=1):
+            title = item.get("title", "")
+            text = item.get("text", "")
+            source = item.get("source", "knowledge")
+            prefix = "Knowledge %d" % i
+            if title:
+                prefix += " (%s:%s)" % (source, title)
+            lines.append("%s: %s" % (prefix, self._truncate_text(text, 500)))
+        return self._truncate_text("\n".join(lines), max_chars)
+
+    def generate_knowledge_notes(self, question, image_path, obj_list, retrieved_knowledge, retrieval_free=False):
+        if retrieval_free:
+            prompt = (
+                "You are generating Knowledge Notes for a visual question answering system.\n"
+                "Look at the image and question, but do not answer the question directly.\n"
+                "Write concise background knowledge, typical-use knowledge, category knowledge, or commonsense "
+                "that would help answer the question. If no extra knowledge is needed, write a short visual note.\n"
+                "Question: %s\n"
+                "Objects of interest: %s\n"
+                "Return Knowledge Notes in no more than %d words."
+                % (question, str(obj_list), self.args.knowledge_notes_max_words)
+            )
+        else:
+            prompt = (
+                "You are generating Knowledge Notes for a visual question answering system.\n"
+                "Use the image and question to filter the retrieved knowledge. Keep only knowledge that is relevant "
+                "to the image-question pair, and ignore misleading or unrelated passages.\n"
+                "Do not answer the question directly. Produce concise notes that can help a later model answer.\n"
+                "Question: %s\n"
+                "Objects of interest: %s\n"
+                "Retrieved knowledge:\n%s\n"
+                "If the retrieved knowledge is not relevant, write a short image-grounded note instead.\n"
+                "Return Knowledge Notes in no more than %d words."
+                % (question, str(obj_list), retrieved_knowledge, self.args.knowledge_notes_max_words)
+            )
+
+        response = self._call_llm(
+            prompt,
+            image_path=image_path if self.args.knowledge_notes_use_image else None,
+            max_new_tokens=self.args.knowledge_notes_max_tokens,
+        )
+        notes = self._truncate_text(response, self.args.knowledge_notes_max_chars)
+
+        print('-----knowledge_notes-----相关信息-----+++++-----beg')
+        print('mode:', self.args.knowledge_notes_mode)
+        print('retrieval_free:', retrieval_free)
+        print('objects:', obj_list)
+        if retrieved_knowledge:
+            print('retrieved_knowledge:', retrieved_knowledge)
+        print('notes:', notes)
+        print('-----knowledge_notes-----相关信息-----+++++-----end')
+
+        return notes
 
     def load_wit_knowkedge(self):
         file_path = '/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-pure/knowledge/deduplicated_merged_by_title.json'
@@ -3314,6 +3799,33 @@ def parser_args():
     parser.add_argument('--use_image_enhance', action='store_true', help="enable image enhancement module")
     parser.add_argument('--use_caption_enhance', action='store_true', help="enable caption enhancement module")
     parser.add_argument('--use_knowledge_enhance', action='store_true', help="enable knowledge enhancement module")
+    parser.add_argument('--knowledge_notes_mode', type=str, default='legacy',
+                        choices=['legacy', 'retrieval_free', 'raw_retrieved', 'notes', 'hybrid'],
+                        help='knowledge enhancement mode: legacy Qwen commonsense, retrieval-free notes, raw retrieved knowledge, NoteMR-style notes, or notes+raw hybrid')
+    parser.add_argument('--knowledge_enhance_trigger', type=str, default='routed',
+                        choices=['routed', 'always', 'knowledge_qtype'],
+                        help='when --use_knowledge_enhance should run: onion-routed only, every sample, or knowledge/category question types')
+    parser.add_argument('--knowledge_corpus_file', type=str, default='',
+                        help='optional JSON/JSONL/TXT external knowledge corpus for Knowledge Notes retrieval')
+    parser.add_argument('--knowledge_retrieval_mode', type=str, default='hybrid',
+                        choices=['lexical', 'hybrid'],
+                        help='retrieval strategy for external knowledge corpus')
+    parser.add_argument('--knowledge_top_k', type=int, default=5,
+                        help='maximum retrieved knowledge passages used for Knowledge Notes')
+    parser.add_argument('--knowledge_use_wit', action='store_true',
+                        help='include local WIT/object-title knowledge as retrieval candidates')
+    parser.add_argument('--knowledge_notes_use_image', action='store_true',
+                        help='let the Knowledge Notes generator inspect the image')
+    parser.add_argument('--knowledge_notes_fallback_legacy', action='store_true',
+                        help='fall back to legacy Qwen knowledge generation when no retrieved knowledge is found')
+    parser.add_argument('--knowledge_notes_max_words', type=int, default=80,
+                        help='word budget requested from the Knowledge Notes generator')
+    parser.add_argument('--knowledge_notes_max_tokens', type=int, default=128,
+                        help='max new tokens for Knowledge Notes generation')
+    parser.add_argument('--knowledge_notes_max_chars', type=int, default=700,
+                        help='max Knowledge Notes characters injected into the final context')
+    parser.add_argument('--knowledge_raw_max_chars', type=int, default=1200,
+                        help='max raw retrieved knowledge characters injected or shown to notes generator')
     parser.add_argument('--mcts_n_simulations', type=int, default=20, help="number of MCTS simulations for image enhancement")
     parser.add_argument('--mcts_trigger_mode', type=str, default='all',
                         choices=['all', 'visual_detail_only', 'count_color_object_only'],
@@ -3349,8 +3861,33 @@ def parser_args():
                                  'visual_facts', 'direct_verify', 'reviewer_evidence',
                                  'reflective_answer_first', 'adaptive_reflective_answer_first',
                                  'candidate_judge', 'protected_reflective', 'rag_strategy_router',
-                                 'multi_strategy_router', 'complex_decompose'],
+                                 'multi_strategy_router', 'complex_decompose',
+                                 'direct_rephrase_consistency'],
                         help='prompt style used when --chain_of_thoughts is enabled')
+    parser.add_argument('--rephrase_num_questions', type=int, default=3,
+                        help='number of semantically equivalent questions generated by direct_rephrase_consistency')
+    parser.add_argument('--rephrase_generation_mode', type=str, default='mixed',
+                        choices=['simple', 'visual_focus', 'answer_type', 'mixed'],
+                        help='how rephrased questions should vary')
+    parser.add_argument('--rephrase_trigger', type=str, default='always',
+                        choices=['always', 'risky_qtype', 'complex_qtype'],
+                        help='which questions trigger direct_rephrase_consistency')
+    parser.add_argument('--rephrase_arbitration', type=str, default='conservative_review',
+                        choices=['keep_baseline', 'majority_if_consensus', 'all_agree', 'conservative_review'],
+                        help='how rephrase answers are allowed to override initial direct answer')
+    parser.add_argument('--rephrase_consensus_threshold', type=int, default=2,
+                        help='minimum rephrased answer votes needed to propose a non-baseline answer')
+    parser.add_argument('--rephrase_answer_context', type=str, default='same',
+                        choices=['same', 'empty', 'regional', 'ocr_regional'],
+                        help='context visible when answering rephrased questions')
+    parser.add_argument('--rephrase_context_max_chars', type=int, default=900,
+                        help='maximum context characters visible to rephrase answer/review prompts')
+    parser.add_argument('--rephrase_generation_max_tokens', type=int, default=128,
+                        help='max tokens for generating rephrased questions')
+    parser.add_argument('--rephrase_answer_max_tokens', type=int, default=16,
+                        help='max tokens for answering each rephrased question')
+    parser.add_argument('--rephrase_review_max_tokens', type=int, default=96,
+                        help='max tokens for conservative rephrase reviewer')
     parser.add_argument('--decompose_complexity_mode', type=str, default='adaptive',
                         choices=['always', 'adaptive', 'conservative', 'never'],
                         help='which questions are decomposed by --cot_style complex_decompose')
@@ -3484,6 +4021,17 @@ def parser_args():
 
 
 def load_official_da_eval_keys(args):
+    if args.dataset_name == "okvqa":
+        question_file = os.path.join(args.coco_path, f"OpenEnded_mscoco_{args.split_name}2014_questions.json")
+        try:
+            questions = json.load(open(question_file, "r"))["questions"]
+        except FileNotFoundError:
+            return set()
+        return {
+            str(sample["image_id"]) + "<->" + str(sample["question_id"])
+            for sample in questions
+        }
+
     anno_file = os.path.join(args.coco_path, f"aokvqa_v1p0_{args.split_name}.json")
     try:
         annotations = json.load(open(anno_file, "r"))
@@ -3497,6 +4045,20 @@ def load_official_da_eval_keys(args):
 
 
 def load_direct_answer_annotations(args):
+    if args.dataset_name == "okvqa":
+        answer_file = os.path.join(args.coco_path, f"mscoco_{args.split_name}2014_annotations.json")
+        try:
+            annotations = json.load(open(answer_file, "r"))["annotations"]
+        except FileNotFoundError:
+            return {}, set()
+        answer_by_key = {}
+        official_keys = set()
+        for sample in annotations:
+            key = str(sample["image_id"]) + "<->" + str(sample["question_id"])
+            answer_by_key[key] = [ans["answer"] for ans in sample.get("answers", [])]
+            official_keys.add(key)
+        return answer_by_key, official_keys
+
     anno_file = os.path.join(args.coco_path, f"aokvqa_v1p0_{args.split_name}.json")
     try:
         annotations = json.load(open(anno_file, "r"))
@@ -3528,7 +4090,7 @@ def direct_answer_eval_report(args, answers):
     answer_by_key, official_keys = load_direct_answer_annotations(args)
     official_scores = []
     legacy_official_scores = []
-    official_exact_full_scores = []
+    official_full_scores = []
     legacy_all_scores = []
 
     for a in answers:
@@ -3539,7 +4101,7 @@ def direct_answer_eval_report(args, answers):
             continue
         official_score = official_direct_answer_score(pred, gold)
         legacy_score = legacy_normalized_direct_answer_score(pred, gold)
-        official_exact_full_scores.append(official_score)
+        official_full_scores.append(official_score)
         legacy_all_scores.append(legacy_score)
         if key in official_keys:
             official_scores.append(official_score)
@@ -3553,12 +4115,12 @@ def direct_answer_eval_report(args, answers):
 
     official_pct, official_sum, official_total = _summarize(official_scores)
     legacy_official_pct, legacy_official_sum, legacy_official_total = _summarize(legacy_official_scores)
-    official_full_pct, official_full_sum, official_full_total = _summarize(official_exact_full_scores)
+    official_full_pct, official_full_sum, official_full_total = _summarize(official_full_scores)
     legacy_full_pct, legacy_full_sum, legacy_full_total = _summarize(legacy_all_scores)
 
-    primary_label = "官方DA准确率"
+    primary_label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
     if args.eval_all_direct_answers:
-        primary_label = "全量官方exact诊断"
+        primary_label = "全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断"
         primary_pct, primary_sum, primary_total = official_full_pct, official_full_sum, official_full_total
     else:
         primary_pct, primary_sum, primary_total = official_pct, official_sum, official_total
@@ -3581,9 +4143,9 @@ def direct_answer_eval_report(args, answers):
         "legacy_full_sum": legacy_full_sum,
         "legacy_full_total": legacy_full_total,
         "lines": [
-            f"官方DA准确率: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
-            f"旧指标@官方DA子集: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
-            f"全量官方exact诊断: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
+            f"{'OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率'}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
+            f"旧指标@{'OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集'}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
+            f"{'全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断'}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
             f"旧指标@全量诊断: {legacy_full_pct:.2f}% ({legacy_full_sum:.2f}/{legacy_full_total})",
         ],
     }
@@ -3596,7 +4158,7 @@ def official_da_eval_answers(args, answers):
     else:
         eval_keys = load_official_da_eval_keys(args)
         eval_answers = [a for a in answers if a[0] in eval_keys]
-        label = "官方DA准确率"
+        label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
     if not eval_answers:
         return 0.0, 0.0, 0, label
     acc = sum(float(a[3]) for a in eval_answers)
@@ -3699,7 +4261,10 @@ def main():
         return
 
     # 数据集准备
-    aokvqa_data = aokvqa_dataset(args)
+    if args.dataset_name == "okvqa":
+        aokvqa_data = okvqa_dataset(args)
+    else:
+        aokvqa_data = aokvqa_dataset(args)
 
     aokvqa_onion = onion(args, dataset=aokvqa_data)
 

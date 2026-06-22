@@ -281,12 +281,14 @@ class aokvqa_dataset:
             tags_dict = self.load_tags()
         if self.args.caption_type == 'vinvl_tag':
             for row in read_tsv:
+                tag_text = tags_dict.get(int(row[0]), "")
+                suffix = ('. ' + tag_text) if tag_text else ""
                 if int(row[0]) not in caption_dict:
                     caption_dict[int(row[0])] = [
-                        row[1].split('caption": "')[1].split('", "conf"')[0] + '. ' + tags_dict[int(row[0])]]
+                        row[1].split('caption": "')[1].split('", "conf"')[0] + suffix]
                 else:
                     caption_dict[int(row[0])].append(
-                        row[1].split('caption": "')[1].split('", "conf"')[0] + '. ' + tags_dict[int(row[0])])
+                        row[1].split('caption": "')[1].split('", "conf"')[0] + suffix)
         else:
             for row in read_tsv:
                 if int(row[0]) not in caption_dict:
@@ -343,6 +345,119 @@ class aokvqa_dataset:
         split = self.args.split_name
         img_full_path = os.path.join(self.args.raw_image_dir,  f"{split}2017/", "COCO_%s2014_%012d.jpg" % (split, img_key))
         return img_full_path
+
+
+class okvqa_dataset(aokvqa_dataset):
+    """OK-VQA loader using the same runtime interface as aokvqa_dataset."""
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("OK-VQA is open-ended VQA in this project; --choice_only is not supported.")
+
+        split = args.split_name
+        if split not in ("train", "val"):
+            raise ValueError(f"OK-VQA only has train/val annotations here, got split_name={split}")
+
+        _, self.answer_dict, self.question_dict = self.load_ok_anno(
+            None,
+            f"{args.coco_path}/mscoco_{split}2014_annotations.json",
+            f"{args.coco_path}/OpenEnded_mscoco_{split}2014_questions.json",
+        )
+        self.rationale_dict = {key: "" for key in self.question_dict}
+        self.choices_dict = {}
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+
+        self.inputtext_dict = self.load_cachetext()
+
+        _, self.traincontext_answer_dict, self.traincontext_question_dict = self.load_ok_anno(
+            None,
+            f"{args.coco_path}/mscoco_train2014_annotations.json",
+            f"{args.coco_path}/OpenEnded_mscoco_train2014_questions.json",
+        )
+        self.traincontext_rationale_dict = {key: "" for key in self.traincontext_question_dict}
+        self.traincontext_choices_dict = {}
+        train_image_ids = {int(key.split("<->")[0]) for key in self.traincontext_question_dict}
+        self.traincontext_caption_dict = {image_id: [""] for image_id in train_image_ids}
+        self.traincontext_interactive_answer_dict = self.traincontext_answer_dict
+        self.traincontext_interactive_question_dict = self.traincontext_question_dict
+
+        self.train_keys = list(self.traincontext_answer_dict.keys())
+        self.train_interactive_keys = self.train_keys
+
+        self.sg_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_attr_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_cap_dir = os.path.join(self.args.sg_path, self.args.concept_caption_path)
+
+        self.train_ocr_text = {}
+        self.val_ocr_text = {}
+
+    def load_ok_anno(self, coco_caption_file, answer_anno_file, question_anno_file):
+        if coco_caption_file is not None:
+            coco_caption = json.load(open(coco_caption_file, "r"))
+            if isinstance(coco_caption, dict):
+                coco_caption = coco_caption["annotations"]
+        answer_anno = json.load(open(answer_anno_file, "r"))
+        question_anno = json.load(open(question_anno_file, "r"))
+
+        caption_dict = {}
+        if coco_caption_file is not None:
+            for sample in coco_caption:
+                caption_dict.setdefault(sample["image_id"], []).append(sample["caption"])
+
+        answer_dict = {}
+        for sample in answer_anno["annotations"]:
+            key = str(sample["image_id"]) + "<->" + str(sample["question_id"])
+            answer_dict[key] = [ans["answer"] for ans in sample.get("answers", [])]
+
+        question_dict = {}
+        for sample in question_anno["questions"]:
+            key = str(sample["image_id"]) + "<->" + str(sample["question_id"])
+            question_dict[key] = sample["question"]
+
+        return caption_dict, answer_dict, question_dict
+
+    def load_similarity(self):
+        split = self.args.split_name
+        val_idx = json.load(open(f"{self.args.similarity_path}/okvqa_qa_line2sample_idx_{split}2014.json", "r"))
+        self.valkey2idx = {val_idx[ii]: int(ii) for ii in val_idx}
+
+        self.train_feature = np.load(f"{self.args.similarity_path}/coco_clip_vitb16_train2014_okvqa_question.npy")
+        self.val_feature = np.load(f"{self.args.similarity_path}/coco_clip_vitb16_{split}2014_okvqa_question.npy")
+        self.train_idx = json.load(open(f"{self.args.similarity_path}/okvqa_qa_line2sample_idx_train2014.json", "r"))
+
+        if self.args.similarity_metric == "imagequestion":
+            self.image_train_feature = np.load(
+                f"{self.args.similarity_path}/coco_clip_vitb16_train2014_okvqa_convertedidx_image.npy"
+            )
+            self.image_val_feature = np.load(
+                f"{self.args.similarity_path}/coco_clip_vitb16_{split}2014_okvqa_convertedidx_image.npy"
+            )
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        split = self.args.split_name
+        if split == "train":
+            coco14_path = os.path.join(
+                self.args.raw_image_dir,
+                "train2014",
+                "COCO_train2014_%012d.jpg" % img_key,
+            )
+            if os.path.isfile(coco14_path):
+                return coco14_path
+            return os.path.join(
+                self.args.raw_image_dir,
+                "train2014_image",
+                "train2014",
+                "COCO_train2014_%012d.jpg" % img_key,
+            )
+        return os.path.join(
+            self.args.raw_image_dir,
+            "val2014",
+            "COCO_val2014_%012d.jpg" % img_key,
+        )
 
 # 根据图片id加载图片
 def find_image(args, img_key):
