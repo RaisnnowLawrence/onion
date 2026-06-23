@@ -9,6 +9,7 @@ import torch
 import random
 import openai
 import re
+import math
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
 import pdb
@@ -71,6 +72,8 @@ class onion:
         self.strategy_profile = {}
         self.val_ocr_text = getattr(dataset, "val_ocr_text", {})
         self.train_ocr_text = getattr(dataset, "train_ocr_text", {})
+        self.last_dyfo_visual_evidence = ""
+        self.last_dyfo_focus_image_path = None
         
         # 引擎初始化
         self.initialize_qwen(self.args.engine)
@@ -96,7 +99,7 @@ class onion:
         # MCTS图像增强所需：加载完整CLIPModel（视觉+文本）用于reward计算
         self.clip_full_model = None
         self.clip_full_processor = None
-        if args.use_image_enhance:
+        if args.use_image_enhance and getattr(args, "mcts_action_mode", "all") != "dyfo_evidence":
             self.clip_full_model = CLIPModel.from_pretrained("/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-model/clip-vit-base-patch16")
             self.clip_full_model = self.clip_full_model.cuda()
             self.clip_full_processor = CLIPProcessor.from_pretrained("/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-model/clip-vit-base-patch16")
@@ -1266,7 +1269,7 @@ class onion:
 
     def _build_reviewer_evidence(self, base_context, selected_objects, regional_context, ocr_context,
                                  enhance_caption, enhance_knowledge, enhance_image_path,
-                                 qwen_global_caption="", qwen_local_caption=""):
+                                 qwen_global_caption="", qwen_local_caption="", dyfo_visual_evidence=""):
         evidence_lines = []
 
         if self._evidence_scope_enabled("caption") and base_context:
@@ -1297,6 +1300,9 @@ class onion:
             evidence_lines.append(
                 "Enhanced image evidence: an auxiliary marked/outlined image view is provided to inspect local visual details."
             )
+
+        if self._evidence_scope_enabled("image") and dyfo_visual_evidence:
+            evidence_lines.append("DyFo visual evidence: %s" % self._truncate_text(dyfo_visual_evidence, 900))
 
         if not evidence_lines:
             return "No extra evidence is available. Keep the initial answer unless the original image clearly contradicts it."
@@ -1548,6 +1554,10 @@ class onion:
             if image_path:
                 lines.append("Visual evidence: an enhanced image view was generated and used.")
 
+            dyfo_evidence = state.get("dyfo_visual_evidence")
+            if dyfo_evidence:
+                lines.append("DyFo visual evidence: %s" % self._truncate_text(dyfo_evidence))
+
             caption_evidence = state.get("enhanced_caption")
             if caption_evidence:
                 lines.append("Caption evidence: %s" % self._truncate_text(caption_evidence))
@@ -1559,8 +1569,8 @@ class onion:
         return "\n".join(lines)
 
     def _make_round_state(self, round_idx, onion_instruction, enhance_image_path,
-                          enhance_caption, enhance_knowledge, pred_answer,
-                          final_score, pred_candidates):
+                          enhance_caption, enhance_knowledge, dyfo_visual_evidence, pred_answer,
+                          final_score, pred_candidates, dyfo_decision_trace=None):
         meta = onion_instruction[2] if len(onion_instruction) > 2 and isinstance(onion_instruction[2], dict) else {}
         selected_objects = onion_instruction[1] if len(onion_instruction) > 1 else []
         state = {
@@ -1573,6 +1583,8 @@ class onion:
             "enhanced_image_path": enhance_image_path,
             "enhanced_caption": enhance_caption,
             "enhanced_knowledge": enhance_knowledge,
+            "dyfo_visual_evidence": dyfo_visual_evidence,
+            "dyfo_decision_trace": dyfo_decision_trace,
             "pred_answer": pred_answer,
             "final_score": final_score,
             "pred_candidates": pred_candidates,
@@ -1584,6 +1596,8 @@ class onion:
             evidence_bits.append("caption")
         if enhance_knowledge:
             evidence_bits.append("knowledge")
+        if dyfo_visual_evidence:
+            evidence_bits.append("dyfo_visual")
         state["executed_evidence"] = evidence_bits
         state["evidence_summary"] = (
             "Round %s: requested %s on [%s]; executed evidence: %s; answer hypothesis: %s"
@@ -2209,6 +2223,11 @@ class onion:
         enhance_image_path = None
         enhance_caption = None
         enhance_knowledge = None
+        dyfo_visual_evidence = ""
+        dyfo_focus_image_path = None
+        dyfo_final_answer = ""
+        dyfo_decision_trace = None
+        dyfo_evidence_enabled = self.args.use_dyfo_visual_evidence or self.args.mcts_action_mode == "dyfo_evidence"
         question_type = self._classify_vqa_question_type(question)
         multi_strategy_route = None
         if self.args.cot_style == "multi_strategy_router":
@@ -2247,8 +2266,21 @@ class onion:
         
         # ========== 三个核心增强模块（由args控制开关） ==========
         if effective_use_image_enhance and onion_instruction[0] == 'image':
-            enhance_image_path = self.enhance_image_object(data_row, onion_instruction[1], attr_list)
-            print('-----enhance_image-----MCTS增强图像已生成-----')
+            if self.args.mcts_action_mode == "dyfo_evidence":
+                dyfo_result = self._run_dyfo_visual_evidence_search(data_row, onion_instruction[1], attr_list)
+                dyfo_visual_evidence = dyfo_result.get("evidence", "")
+                dyfo_focus_image_path = dyfo_result.get("focus_image_path")
+                dyfo_final_answer = dyfo_result.get("final_answer", "")
+                dyfo_decision_trace = dyfo_result.get("decision_trace")
+                self.last_dyfo_visual_evidence = dyfo_visual_evidence
+                self.last_dyfo_focus_image_path = dyfo_focus_image_path
+                if self.args.dyfo_use_focus_image_as_answer and dyfo_focus_image_path:
+                    enhance_image_path = dyfo_focus_image_path
+                print('-----enhance_image-----DyFo visual evidence已生成-----')
+                print('dyfo_visual_evidence:', dyfo_visual_evidence)
+            else:
+                enhance_image_path = self.enhance_image_object(data_row, onion_instruction[1], attr_list)
+                print('-----enhance_image-----MCTS增强图像已生成-----')
 
         if effective_use_caption_enhance and (onion_instruction[0] == 'caption' or selective_mode):
             enhance_caption = self.enhance_caption_object(data_row, onion_instruction[1], attr_list)
@@ -2385,10 +2417,18 @@ class onion:
                 cur_caption += '\n' + enhance_caption
             if self.args.use_knowledge_enhance and enhance_knowledge:
                 cur_caption += '\n' + enhance_knowledge
+            if dyfo_evidence_enabled and dyfo_visual_evidence:
+                cur_caption += '\nDyFo visual evidence: ' + self._truncate_text(
+                    dyfo_visual_evidence, self.args.dyfo_evidence_context_max_chars
+                )
             if self.args.direct_prompt_style == "context_gated":
                 cur_caption = self._build_direct_context_for_style(
                     question, caption, regional_context, ocr_context
                 )
+                if dyfo_evidence_enabled and dyfo_visual_evidence:
+                    cur_caption += '\nDyFo visual evidence: ' + self._truncate_text(
+                        dyfo_visual_evidence, self.args.dyfo_evidence_context_max_chars
+                    )
             prompt_context = direct_answer_context if self.args.cot_style == "reviewer_evidence" else cur_caption
 
             # 上下文参考
@@ -2756,6 +2796,8 @@ class onion:
                         if self.args.candidate_judge_include_coverage_candidate:
                             coverage_context = cur_caption
                             coverage_parts = [regional_context, ocr_context, enhance_caption, enhance_knowledge]
+                            if dyfo_evidence_enabled:
+                                coverage_parts.append(dyfo_visual_evidence)
                             for part in coverage_parts:
                                 if part:
                                     coverage_context += "\n" + part
@@ -2804,6 +2846,7 @@ class onion:
                                 enhance_image_path=enhance_image_path,
                                 qwen_global_caption=qwen_global_caption if self.args.use_qwen_blip2_caption else "",
                                 qwen_local_caption=qwen_local_caption if self.args.use_qwen_blip2_caption else "",
+                                dyfo_visual_evidence=dyfo_visual_evidence if dyfo_evidence_enabled else "",
                             )
                             judge_prompt = self._format_candidate_judge_prompt(
                                 question, choice_text, question_type, evidence_text, unique_candidate_records
@@ -2856,6 +2899,7 @@ class onion:
                             enhance_image_path=enhance_image_path,
                             qwen_global_caption=qwen_global_caption if self.args.use_qwen_blip2_caption else "",
                             qwen_local_caption=qwen_local_caption if self.args.use_qwen_blip2_caption else "",
+                            dyfo_visual_evidence=dyfo_visual_evidence if dyfo_evidence_enabled else "",
                         )
                         verify_prompt = self._format_reviewer_evidence_prompt(
                             question, choice_text, initial_answer, evidence_text
@@ -2959,6 +3003,18 @@ class onion:
                 print("    REASON POST TIME", t4-t3)
         maxval = -999.
         pred_candidates = [self._postprocess_answer(candidate) for candidate in pred_candidates]
+        if (
+            self.args.mcts_action_mode == "dyfo_evidence"
+            and self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote")
+            and dyfo_final_answer
+        ):
+            pred_candidates = [self._postprocess_answer(dyfo_final_answer)]
+            print('-----dyfo_decision-----使用DyFo native final answer-----+++++-----beg')
+            print('dyfo_decision_mode:', self.args.dyfo_decision_mode)
+            print('dyfo_final_answer:', dyfo_final_answer)
+            print('dyfo_decision_trace:', dyfo_decision_trace)
+            print('-----dyfo_decision-----使用DyFo native final answer-----+++++-----end')
+            print()
 
         if self.args.ensemble_strategy == "first":
             pred_answer = pred_candidates[0]
@@ -3003,9 +3059,11 @@ class onion:
             enhance_image_path=enhance_image_path,
             enhance_caption=enhance_caption,
             enhance_knowledge=enhance_knowledge,
+            dyfo_visual_evidence=dyfo_visual_evidence,
             pred_answer=pred_answer,
             final_score=final_score,
-            pred_candidates=pred_candidates
+            pred_candidates=pred_candidates,
+            dyfo_decision_trace=dyfo_decision_trace
         )
         if self.args.chain_of_thoughts:
             return [key, pred_answer, prompt, final_score, thought_list, all_thought_list, float(maxval),
@@ -3147,6 +3205,420 @@ class onion:
             return any(pattern in q for pattern in narrow_patterns)
 
         return any(pattern in q for pattern in visual_patterns)
+
+    def _dyfo_should_trigger(self, question, question_type):
+        mode = getattr(self.args, "dyfo_trigger_mode", "visual_detail")
+        if mode == "always":
+            return True
+        if mode == "never":
+            return False
+        if mode == "mcts":
+            return self._mcts_should_trigger(question)
+        if mode == "visual_detail":
+            return (
+                question_type in ("visual_detail", "text_ocr", "category")
+                or self._question_is_count(question)
+                or "color" in str(question).lower()
+            )
+        return self._mcts_should_trigger(question)
+
+    def _parse_dyfo_focus_text(self, response, fallback):
+        text = str(response).strip()
+        matches = re.findall(r"(?:focus|target|cue)\s*:\s*(.+)", text, flags=re.IGNORECASE)
+        if matches:
+            text = matches[-1].strip()
+        else:
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            text = lines[-1] if lines else str(fallback)
+        text = re.sub(r"^\s*(?:[-*]|\d+[\).:])\s*", "", text).strip()
+        text = text.strip(" \t\"'`.,;:!?")
+        if not text or len(text.split()) > 12:
+            return str(fallback).strip()
+        return text
+
+    def _dyfo_initial_focus(self, question, obj_list):
+        object_hint = ", ".join(obj_list[:8]) if obj_list else "none"
+        prompt = (
+            "Choose the most useful visual focus cue for answering the question.\n"
+            "The focus should be a visible object, attribute, text area, relation, or small region that a visual expert can localize.\n"
+            "Do not answer the question. Output exactly: Focus: <short visual cue>\n"
+            "Question: %s\n"
+            "Candidate objects: %s"
+        ) % (question, object_hint)
+        response = self._call_llm(prompt, image_path=None, max_new_tokens=self.args.dyfo_focus_max_tokens, use_images=False)
+        fallback = obj_list[0] if obj_list else question
+        return self._parse_dyfo_focus_text(response, fallback), response
+
+    def _dyfo_refine_focus(self, question, current_focus, action, image_path):
+        if action == "semantic_focus":
+            instruction = (
+                "Make the visual focus more specific and localizable. Prefer the object, attribute, text, or relation "
+                "most directly needed by the question."
+            )
+        else:
+            instruction = (
+                "Broaden the visual focus just enough to include missing context around the current target. "
+                "Keep it short and localizable."
+            )
+        prompt = (
+            "You are updating a visual search focus for a VQA system.\n"
+            "%s\n"
+            "Do not answer the question. Output exactly: Focus: <short visual cue>\n"
+            "Question: %s\n"
+            "Current focus: %s"
+        ) % (instruction, question, current_focus)
+        response = self._call_llm(
+            prompt, image_path=image_path if self.args.dyfo_text_focus_use_image else None,
+            max_new_tokens=self.args.dyfo_focus_max_tokens,
+            use_images=self.args.dyfo_text_focus_use_image,
+        )
+        return self._parse_dyfo_focus_text(response, current_focus), response
+
+    def _dyfo_locate_focus(self, image_pil, focus_text):
+        if image_pil.mode != "RGB":
+            image_pil = image_pil.convert("RGB")
+        try:
+            with torch.no_grad():
+                result = self.sam.predict([image_pil], [focus_text])
+        except Exception as exc:
+            print(f"[dyfo] visual expert failed for focus={focus_text}: {exc}")
+            return None
+        if not result:
+            return None
+        masks = result[0].get("masks", None)
+        if masks is None or len(masks) == 0:
+            return None
+        boxes = []
+        for mask in masks:
+            mask_array = mask if isinstance(mask, np.ndarray) else np.array(mask)
+            if mask_array.dtype != bool:
+                mask_array = mask_array > 0
+            y_idx, x_idx = np.where(mask_array)
+            if len(y_idx) == 0 or len(x_idx) == 0:
+                continue
+            boxes.append([
+                int(np.min(x_idx)), int(np.min(y_idx)),
+                int(np.max(x_idx)), int(np.max(y_idx))
+            ])
+        if not boxes:
+            return None
+        boxes = np.array(boxes)
+        return (
+            int(np.min(boxes[:, 0])),
+            int(np.min(boxes[:, 1])),
+            int(np.max(boxes[:, 2])),
+            int(np.max(boxes[:, 3])),
+        )
+
+    def _dyfo_expand_box(self, box, image_size, scale):
+        w, h = image_size
+        x1, y1, x2, y2 = box
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+        bw = max(1.0, (x2 - x1) * scale)
+        bh = max(1.0, (y2 - y1) * scale)
+        return (
+            int(max(0, cx - bw / 2.0)),
+            int(max(0, cy - bh / 2.0)),
+            int(min(w, cx + bw / 2.0)),
+            int(min(h, cy + bh / 2.0)),
+        )
+
+    def _dyfo_crop_for_node(self, image_pil, box):
+        if not box:
+            return image_pil
+        x1, y1, x2, y2 = box
+        if x2 <= x1 or y2 <= y1:
+            return image_pil
+        return image_pil.crop((x1, y1, x2, y2))
+
+    def _dyfo_consistency_check(self, crop, focus_text, question):
+        temp_path = None
+        try:
+            temp_path = os.path.join(
+                self.args.cache_path,
+                "dyfo_check_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+            )
+            os.makedirs(self.args.cache_path, exist_ok=True)
+            crop.save(temp_path)
+            prompt = (
+                "Check whether the image crop clearly contains the visual focus needed for the question.\n"
+                "Reply with only yes or no.\n"
+                "Question: %s\n"
+                "Visual focus: %s"
+            ) % (question, focus_text)
+            reply = self._call_llm(prompt, image_path=temp_path, max_new_tokens=8)
+            return 1.0 if str(reply).strip().lower().startswith("yes") else 0.0, reply
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def _dyfo_answer_from_crop(self, crop, focus_text, question):
+        temp_path = None
+        try:
+            temp_path = os.path.join(
+                self.args.cache_path,
+                "dyfo_answer_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+            )
+            os.makedirs(self.args.cache_path, exist_ok=True)
+            crop.save(temp_path)
+            prompt = (
+                "Answer the visual question using this focused image region.\n"
+                "Use the visual focus as a hint, but answer the original question.\n"
+                "If the crop is insufficient, make the best concise answer from visible evidence.\n"
+                "Return only one word or a short phrase.\n"
+                "Question: %s\n"
+                "Visual focus: %s\n"
+                "Answer:"
+            ) % (question, focus_text)
+            response = self._call_llm(
+                prompt,
+                image_path=temp_path,
+                max_new_tokens=getattr(self.args, "dyfo_answer_max_tokens", 32),
+            )
+            answer = self._clean_short_answer(self._extract_answer_from_response(response))
+            return answer, response, prompt
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def _dyfo_node_reward(self, visual_hit, lmm_consistent, area_ratio):
+        if not visual_hit:
+            return 0.0
+        consistency = 1.0 if lmm_consistent > 0 else 0.0
+        if getattr(self.args, "dyfo_area_reward", "compact") == "paper":
+            area_score = area_ratio
+        else:
+            area_score = 1.0 - area_ratio
+        return max(0.0, min(1.0, consistency * area_score))
+
+    def _dyfo_weighted_vote(self, nodes):
+        vote_scores = defaultdict(float)
+        norm_to_answer = {}
+        vote_items = []
+        for node in nodes:
+            answer = self._clean_short_answer(getattr(node, "local_answer", ""))
+            if not answer:
+                continue
+            norm = normalize_vqa_answer(answer)
+            if not norm:
+                continue
+            mean_value = node.value / max(1, node.visits)
+            weight = max(float(getattr(node, "reward", 0.0)), float(mean_value), 1e-6)
+            vote_scores[norm] += weight
+            norm_to_answer.setdefault(norm, answer)
+            vote_items.append({
+                "focus": node.focus,
+                "action": node.action,
+                "depth": node.depth,
+                "answer": answer,
+                "normalized_answer": norm,
+                "weight": weight,
+                "reward": node.reward,
+                "visits": node.visits,
+            })
+        if not vote_scores:
+            return "", {"vote_scores": {}, "vote_items": vote_items}
+        best_norm = max(vote_scores, key=vote_scores.get)
+        return norm_to_answer[best_norm], {
+            "best_normalized_answer": best_norm,
+            "vote_scores": dict(vote_scores),
+            "vote_items": vote_items,
+        }
+
+    def _run_dyfo_visual_evidence_search(self, data_row, obj_list, attr_list):
+        key = data_row["key"]
+        image_path = data_row["image_path"]
+        question = data_row["question"]
+        question_type = self._classify_vqa_question_type(question)
+        if not self._dyfo_should_trigger(question, question_type):
+            return {"evidence": "", "focus_image_path": None, "trace": "skipped_by_trigger"}
+
+        _, selected_objects = self.init_attention_object(key, attr_list, image_path, ban_option=[])
+        obj_list = list(dict.fromkeys((obj_list or []) + selected_objects))
+        if not obj_list:
+            obj_list = selected_objects
+
+        original = Image.open(image_path).convert("RGB")
+        image_area = max(1, original.width * original.height)
+        initial_focus, initial_focus_response = self._dyfo_initial_focus(question, obj_list)
+
+        class _Node:
+            def __init__(self, focus, box, depth, parent=None, action="root"):
+                self.focus = focus
+                self.box = box
+                self.image_region = box
+                self.textual_cue = focus
+                self.depth = depth
+                self.parent = parent
+                self.action = action
+                self.children = []
+                self.untried = ["semantic_focus", "semantic_scatter"]
+                self.visits = 0
+                self.value = 0.0
+                self.reward = 0.0
+                self.visual_hit = False
+                self.lmm_reply = ""
+                self.focus_response = ""
+                self.local_answer = ""
+                self.local_answer_response = ""
+                self.local_answer_prompt = ""
+
+        root = _Node(initial_focus, (0, 0, original.width, original.height), 0)
+        nodes = [root]
+
+        def select_node(node):
+            while node.children and not node.untried and node.depth < self.args.dyfo_max_depth:
+                total = max(1, sum(child.visits for child in node.children))
+                def ucb(child):
+                    exploit = child.value / max(1, child.visits)
+                    explore = self.args.dyfo_exploration_weight * math.sqrt(math.log(total + 1) / max(1, child.visits))
+                    return exploit + explore
+                node = max(node.children, key=ucb)
+            return node
+
+        for _ in range(max(1, self.args.dyfo_n_simulations)):
+            leaf = select_node(root)
+            if leaf.depth >= self.args.dyfo_max_depth:
+                target = leaf
+            else:
+                action = leaf.untried.pop(0) if leaf.untried else random.choice(["semantic_focus", "semantic_scatter"])
+                parent_crop = self._dyfo_crop_for_node(original, leaf.box)
+                parent_crop_path = None
+                try:
+                    parent_crop_path = os.path.join(
+                        self.args.cache_path,
+                        "dyfo_parent_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+                    )
+                    os.makedirs(self.args.cache_path, exist_ok=True)
+                    parent_crop.save(parent_crop_path)
+                    focus, focus_response = self._dyfo_refine_focus(question, leaf.focus, action, parent_crop_path)
+                finally:
+                    if parent_crop_path and os.path.exists(parent_crop_path):
+                        os.remove(parent_crop_path)
+
+                if action == "semantic_focus":
+                    base_crop = parent_crop
+                    local_box = self._dyfo_locate_focus(base_crop, focus)
+                    if local_box:
+                        lx1, ly1, lx2, ly2 = local_box
+                        px1, py1, _, _ = leaf.box
+                        box = (px1 + lx1, py1 + ly1, px1 + lx2, py1 + ly2)
+                    else:
+                        box = leaf.box
+                else:
+                    located = self._dyfo_locate_focus(parent_crop, focus)
+                    if located:
+                        lx1, ly1, lx2, ly2 = located
+                        px1, py1, _, _ = leaf.box
+                        local_abs = (px1 + lx1, py1 + ly1, px1 + lx2, py1 + ly2)
+                        box = self._dyfo_expand_box(local_abs, original.size, self.args.dyfo_scatter_scale)
+                    else:
+                        box = self._dyfo_expand_box(leaf.box, original.size, self.args.dyfo_scatter_scale)
+                box = self._dyfo_expand_box(box, original.size, self.args.dyfo_focus_padding)
+                target = _Node(focus, box, leaf.depth + 1, parent=leaf, action=action)
+                target.focus_response = focus_response
+                leaf.children.append(target)
+                nodes.append(target)
+
+            crop = self._dyfo_crop_for_node(original, target.box)
+            visual_hit = self._dyfo_locate_focus(crop, target.focus) is not None
+            lmm_consistent, lmm_reply = self._dyfo_consistency_check(crop, target.focus, question)
+            x1, y1, x2, y2 = target.box
+            area_ratio = max(0.0, min(1.0, ((x2 - x1) * (y2 - y1)) / image_area))
+            reward = self._dyfo_node_reward(visual_hit, lmm_consistent, area_ratio)
+            target.reward = reward
+            target.visual_hit = visual_hit
+            target.lmm_reply = lmm_reply
+            if self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote") and not target.local_answer:
+                local_answer, local_response, local_prompt = self._dyfo_answer_from_crop(
+                    crop, target.focus, question
+                )
+                target.local_answer = local_answer
+                target.local_answer_response = local_response
+                target.local_answer_prompt = local_prompt
+            node = target
+            while node:
+                node.visits += 1
+                node.value += reward
+                node = node.parent
+
+        best_node = max(nodes, key=lambda n: (n.reward, n.value / max(1, n.visits), -n.depth))
+        best_crop = self._dyfo_crop_for_node(original, best_node.box)
+        if self.args.dyfo_decision_mode == "best_focus_answer" and not best_node.local_answer:
+            local_answer, local_response, local_prompt = self._dyfo_answer_from_crop(
+                best_crop, best_node.focus, question
+            )
+            best_node.local_answer = local_answer
+            best_node.local_answer_response = local_response
+            best_node.local_answer_prompt = local_prompt
+        image_filename = os.path.basename(image_path)
+        focus_image_path = os.path.join(self.args.cache_path, "dyfo_focus_%s" % image_filename)
+        os.makedirs(self.args.cache_path, exist_ok=True)
+        best_crop.save(focus_image_path)
+
+        evidence_prompt = (
+            "Write concise visual evidence from this focused image crop for answering the question.\n"
+            "Do not answer the question unless the evidence directly determines it.\n"
+            "Use at most two short bullet points. Mention uncertainty if the crop is unclear.\n"
+            "Question: %s\n"
+            "Visual focus: %s"
+        ) % (question, best_node.focus)
+        evidence_response = self._call_llm(
+            evidence_prompt, image_path=focus_image_path, max_new_tokens=self.args.dyfo_evidence_max_tokens
+        )
+        evidence = (
+            "Focus: %s. Search action: %s. Reward: %.3f. Evidence: %s"
+            % (best_node.focus, best_node.action, best_node.reward, self._truncate_text(evidence_response, 700))
+        )
+        final_answer = ""
+        decision_trace = {
+            "mode": self.args.dyfo_decision_mode,
+            "best_focus_answer": best_node.local_answer,
+        }
+        if self.args.dyfo_decision_mode == "best_focus_answer":
+            final_answer = best_node.local_answer
+        elif self.args.dyfo_decision_mode == "weighted_vote":
+            final_answer, vote_trace = self._dyfo_weighted_vote(nodes)
+            decision_trace.update(vote_trace)
+        trace = {
+            "initial_focus": initial_focus,
+            "initial_focus_response": initial_focus_response,
+            "best_focus": best_node.focus,
+            "best_action": best_node.action,
+            "best_box": best_node.box,
+            "best_reward": best_node.reward,
+            "best_focus_answer": best_node.local_answer,
+            "dyfo_decision_mode": self.args.dyfo_decision_mode,
+            "dyfo_final_answer": final_answer,
+            "dyfo_decision_trace": decision_trace,
+            "nodes": [
+                {
+                    "focus": node.focus,
+                    "textual_cue": node.textual_cue,
+                    "action": node.action,
+                    "depth": node.depth,
+                    "box": node.box,
+                    "image_region": node.image_region,
+                    "reward": node.reward,
+                    "visits": node.visits,
+                    "visual_hit": node.visual_hit,
+                    "lmm_reply": node.lmm_reply,
+                    "local_answer": node.local_answer,
+                }
+                for node in nodes
+            ],
+        }
+        print("[dyfo] visual evidence:", evidence)
+        if final_answer:
+            print("[dyfo] final answer:", final_answer)
+        return {
+            "evidence": evidence,
+            "focus_image_path": focus_image_path,
+            "final_answer": final_answer,
+            "decision_trace": decision_trace,
+            "trace": trace,
+        }
 
     def enhance_image_object(self, data_row, obj_list, attr_list):
 
@@ -3831,10 +4303,43 @@ def parser_args():
                         choices=['all', 'visual_detail_only', 'count_color_object_only'],
                         help='controls which questions can trigger MCTS image enhancement')
     parser.add_argument('--mcts_action_mode', type=str, default='all',
-                        choices=['all', 'outline_only', 'marker_only', 'no_crop'],
+                        choices=['all', 'outline_only', 'marker_only', 'no_crop', 'dyfo_evidence'],
                         help='controls the MCTS image operation set')
     parser.add_argument('--mcts_filter_objects', action='store_true',
                         help='filter generic MCTS key objects and align them to selected scene-graph objects')
+    parser.add_argument('--use_dyfo_visual_evidence', action='store_true',
+                        help='inject DyFo-style visual evidence into final answer/reviewer prompts')
+    parser.add_argument('--dyfo_trigger_mode', type=str, default='visual_detail',
+                        choices=['always', 'never', 'visual_detail', 'mcts'],
+                        help='which questions can trigger DyFo-style visual evidence search')
+    parser.add_argument('--dyfo_n_simulations', type=int, default=6,
+                        help='number of DyFo-style focus-tree simulations')
+    parser.add_argument('--dyfo_max_depth', type=int, default=3,
+                        help='maximum depth for DyFo-style focus-tree search')
+    parser.add_argument('--dyfo_exploration_weight', type=float, default=1.0,
+                        help='UCT exploration weight for DyFo-style focus-tree search')
+    parser.add_argument('--dyfo_scatter_scale', type=float, default=1.6,
+                        help='semantic scatter expansion scale')
+    parser.add_argument('--dyfo_focus_padding', type=float, default=1.2,
+                        help='padding scale around localized focus boxes')
+    parser.add_argument('--dyfo_area_reward', type=str, default='compact',
+                        choices=['compact', 'paper'],
+                        help='compact rewards small consistent regions; paper uses the raw area ratio')
+    parser.add_argument('--dyfo_text_focus_use_image', action='store_true',
+                        help='let Qwen see the current crop while updating the textual focus')
+    parser.add_argument('--dyfo_use_focus_image_as_answer', action='store_true',
+                        help='answer on the best DyFo focus crop instead of only injecting evidence')
+    parser.add_argument('--dyfo_decision_mode', type=str, default='evidence_inject',
+                        choices=['evidence_inject', 'best_focus_answer', 'weighted_vote'],
+                        help='DyFo final decision: inject evidence into the normal answer path, answer from the best focus node, or reward-weighted vote over focus nodes')
+    parser.add_argument('--dyfo_focus_max_tokens', type=int, default=32,
+                        help='max tokens for textual focus generation')
+    parser.add_argument('--dyfo_answer_max_tokens', type=int, default=32,
+                        help='max tokens for each DyFo focus-node local answer')
+    parser.add_argument('--dyfo_evidence_max_tokens', type=int, default=96,
+                        help='max tokens for final DyFo visual evidence generation')
+    parser.add_argument('--dyfo_evidence_context_max_chars', type=int, default=700,
+                        help='max characters of DyFo visual evidence injected into answer context')
     parser.add_argument('--use_all_regional_captions', action='store_true',
                         help='inject top regional captions instead of selecting a few objects over multiple rounds')
     parser.add_argument('--max_regional_captions', type=int, default=25,
