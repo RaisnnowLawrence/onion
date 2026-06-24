@@ -87,7 +87,7 @@ class aokvqa_dataset:
         self.traincontext_question_dict, self.traincontext_rationale_dict, \
         self.traincontext_choices_dict = \
             self.load_anno(
-                '%s/captions_train2017.json' % args.coco_path,  # COCO训练集描述
+                '%s/captions_train2017.json' % args.coco_annotation_path,  # COCO训练集描述
                 '%s/aokvqa_v1p0_train.json' % args.coco_path,   # AOK-VQA训练集问题
                 '%s/aokvqa_v1p0_train.json' % args.coco_path,   # 同上（可能为占位）
                 choice_only=args.choice_only
@@ -464,6 +464,86 @@ class okvqa_dataset(aokvqa_dataset):
             "val2014",
             "COCO_val2014_%012d.jpg" % img_key,
         )
+
+
+class pope_dataset(aokvqa_dataset):
+    """POPE yes/no hallucination benchmark loader.
+
+    POPE annotation files are JSONL and use COCO val2014 images. `split_name=all`
+    concatenates random, popular, and adversarial subsets while preserving the
+    subset name in the question id.
+    """
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("POPE is a yes/no open-ended benchmark; --choice_only is not supported.")
+
+        self.raw_image_dir = args.raw_image_dir
+        self.image_filename_dict = {}
+
+        subsets = ["random", "popular", "adversarial"] if args.split_name == "all" else [args.split_name]
+        self.answer_dict = {}
+        self.question_dict = {}
+        self.rationale_dict = {}
+        self.choices_dict = {}
+
+        for subset in subsets:
+            anno_file = os.path.join(args.coco_path, f"coco_pope_{subset}.json")
+            with open(anno_file, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    sample = json.loads(line)
+                    image_id = int(sample["image"].split("_")[-1].split(".")[0])
+                    key = f"{image_id}<->{subset}_{sample['question_id']}"
+                    self.answer_dict[key] = [str(sample["label"]).lower()]
+                    self.question_dict[key] = sample["text"]
+                    self.rationale_dict[key] = ""
+                    self.choices_dict[key] = ["yes", "no"]
+                    self.image_filename_dict[image_id] = sample["image"]
+
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+
+        self.inputtext_dict = self.load_cachetext()
+
+        # Reuse A-OKVQA train annotations as few-shot context. POPE itself has no train split.
+        self.traincontext_caption_dict, self.traincontext_answer_dict, self.traincontext_question_dict, \
+        self.traincontext_rationale_dict, self.traincontext_choices_dict = \
+            self.load_anno(
+                '%s/captions_train2017.json' % args.coco_annotation_path,
+                '%s/aokvqa_v1p0_train.json' % args.aokvqa_context_path,
+                '%s/aokvqa_v1p0_train.json' % args.aokvqa_context_path,
+                choice_only=False,
+            )
+        self.traincontext_interactive_answer_dict = self.traincontext_answer_dict
+        self.traincontext_interactive_question_dict = self.traincontext_question_dict
+        self.train_keys = list(self.traincontext_answer_dict.keys())
+        self.train_interactive_keys = self.train_keys
+
+        self.sg_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_attr_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_cap_dir = os.path.join(self.args.sg_path, self.args.concept_caption_path)
+
+        self.train_ocr_text = {}
+        self.val_ocr_text = {}
+
+    def load_similarity(self):
+        self.valkey2idx = {}
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        filename = self.image_filename_dict.get(int(img_key), "COCO_val2014_%012d.jpg" % int(img_key))
+        candidates = [
+            os.path.join(self.args.raw_image_dir, "val2014", filename),
+            os.path.join(self.args.raw_image_dir, filename),
+        ]
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+        return candidates[0]
 
 # 根据图片id加载图片
 def find_image(args, img_key):

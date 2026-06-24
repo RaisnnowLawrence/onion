@@ -27,7 +27,7 @@ from lang_sam import LangSAM
 
 from sam_utils import process_langsam_results_to_visualization, combine_masks_max_simple, clean_string_basic
 
-from aokvqa_utils import aokvqa_dataset, okvqa_dataset
+from aokvqa_utils import aokvqa_dataset, okvqa_dataset, pope_dataset
 from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible
 from mcts import MCTSQuestionSample
 from official_vqa_answer_processor import normalize_vqa_answer
@@ -58,6 +58,25 @@ def legacy_normalized_direct_answer_score(pred_answer, direct_answers):
     return min(1.0, float(counter) * 0.3)
 
 
+def normalize_yes_no_answer(answer):
+    text = normalize_vqa_answer(answer)
+    if text.startswith("yes"):
+        return "yes"
+    if text.startswith("no"):
+        return "no"
+    if text in ("true", "present"):
+        return "yes"
+    if text in ("false", "absent"):
+        return "no"
+    return text
+
+
+def yes_no_answer_score(pred_answer, direct_answers):
+    pred = normalize_yes_no_answer(pred_answer)
+    gold = normalize_yes_no_answer(direct_answers[0] if direct_answers else "")
+    return 1.0 if pred == gold else 0.0
+
+
 class onion:    
     def __init__(self, args, dataset):
 
@@ -74,6 +93,7 @@ class onion:
         self.train_ocr_text = getattr(dataset, "train_ocr_text", {})
         self.last_dyfo_visual_evidence = ""
         self.last_dyfo_focus_image_path = None
+        self.train_keys = getattr(dataset, "train_keys", [])
         
         # 引擎初始化
         self.initialize_qwen(self.args.engine)
@@ -173,6 +193,11 @@ class onion:
         return answer
 
     def _format_direct_answer_instruction(self, question, prompt_before_answer):
+        if getattr(self.args, "dataset_name", "") == "pope":
+            return (
+                "=== Answer with only yes or no.\n"
+                "%s" % prompt_before_answer
+            )
         style = getattr(self.args, "direct_prompt_style", "default")
         if style == "answer_first_strict":
             return (
@@ -506,7 +531,7 @@ class onion:
         visual_detail_cues = (
             "how many", "count", "what color", "which color", "color", "where", "which side",
             "left", "right", "behind", "front", "next to", "wearing", "holding", "doing",
-            "mouth", "hand", "what is in", "what are in", "what is on"
+            "mouth", "hand", "what is in", "what are in", "what is on", "is there", "are there"
         )
         knowledge_cues = (
             "why", "used for", "use for", "purpose", "probably", "most likely", "event",
@@ -2337,6 +2362,8 @@ class onion:
             for ni in range(self.args.n_shot):
                 # 初始化上下文list
                 if context_key_list is None:
+                    if not self.train_keys:
+                        raise ValueError("No train context keys are available for few-shot prompting.")
                     context_key = self.train_keys[random.randint(0, len(self.train_keys) - 1)]
                 else:
                     context_key = context_key_list[ni + self.args.n_shot * repeat]
@@ -3044,7 +3071,9 @@ class onion:
                 pred_answer = self.choices_dict[key][sim.argmax().item()]
             final_score = 1 if pred_answer == self.choices_dict[key][answer] else 0
         else:
-            if self.args.legacy_answer_normalization:
+            if self.args.dataset_name == "pope":
+                final_score = yes_no_answer_score(pred_answer, answer)
+            elif self.args.legacy_answer_normalization:
                 final_score = legacy_normalized_direct_answer_score(pred_answer, answer)
             else:
                 final_score = official_direct_answer_score(pred_answer, answer)
@@ -4500,7 +4529,7 @@ def parser_args():
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
     # 数据集选择-验证测试
-    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa')
+    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa, pope')
     parser.add_argument('--split_name', type=str, default='val', help='train, val, test')
     # 描述文本选择
     parser.add_argument('--caption_type', type=str, default='vinvl_tag', help='vinvl_tag, vinvl, vinvl_sg, vinvl_ocr')
@@ -4508,7 +4537,7 @@ def parser_args():
     parser.add_argument('--output_path', type=str, default='output')
     parser.add_argument('--cache_path', type=str, default='/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-pure/cache')
     # 不确定要不要修改的路径
-    parser.add_argument('--raw_image_dir', type=str, default="/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/coco17")
+    parser.add_argument('--raw_image_dir', type=str, default="/data2/lizhengxue/datasets/coco17")
     parser.add_argument('--tag_path', type=str, default='input_text/coco_caption_pred_tags')
     parser.add_argument('--concept_caption_path', type=str, default='scene_graph_coco17_caption')
     parser.add_argument('--sg_path', type=str, default='/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/input_text/scene_graph_text')
@@ -4517,7 +4546,12 @@ def parser_args():
     parser.add_argument('--train_sim_metric', type=str, default='rationale')
     parser.add_argument('--train_sim_file', type=str, default='')
     parser.add_argument('--val_sim_file', type=str, default='')
-    parser.add_argument('--coco_path', type=str, default='/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/coco_annotations')
+    parser.add_argument('--coco_path', type=str, default='/data2/lizhengxue/datasets/aokvqa')
+    parser.add_argument('--coco_annotation_path', type=str, default='/data2/lizhengxue/datasets/coco17/annotations',
+                        help='COCO caption/instance annotation directory, separated from VQA annotation directories')
+    parser.add_argument('--aokvqa_context_path', type=str,
+                        default='/data2/lizhengxue/datasets/aokvqa',
+                        help='A-OKVQA annotation directory reused as few-shot context for datasets without train annotations')
     parser.add_argument('--valcaption_file', type=str, default='/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/input_text/vinvl_caption/VinVL_base_val2014.tsv')
 
     args = parser.parse_args()
@@ -4526,6 +4560,9 @@ def parser_args():
 
 
 def load_official_da_eval_keys(args):
+    if args.dataset_name == "pope":
+        answer_by_key, official_keys = load_direct_answer_annotations(args)
+        return official_keys
     if args.dataset_name == "okvqa":
         question_file = os.path.join(args.coco_path, f"OpenEnded_mscoco_{args.split_name}2014_questions.json")
         try:
@@ -4550,6 +4587,27 @@ def load_official_da_eval_keys(args):
 
 
 def load_direct_answer_annotations(args):
+    if args.dataset_name == "pope":
+        subsets = ["random", "popular", "adversarial"] if args.split_name == "all" else [args.split_name]
+        answer_by_key = {}
+        official_keys = set()
+        for subset in subsets:
+            anno_file = os.path.join(args.coco_path, f"coco_pope_{subset}.json")
+            try:
+                f = open(anno_file, "r")
+            except FileNotFoundError:
+                continue
+            with f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    sample = json.loads(line)
+                    image_id = int(sample["image"].split("_")[-1].split(".")[0])
+                    key = f"{image_id}<->{subset}_{sample['question_id']}"
+                    answer_by_key[key] = [str(sample["label"]).lower()]
+                    official_keys.add(key)
+        return answer_by_key, official_keys
+
     if args.dataset_name == "okvqa":
         answer_file = os.path.join(args.coco_path, f"mscoco_{args.split_name}2014_annotations.json")
         try:
@@ -4604,8 +4662,12 @@ def direct_answer_eval_report(args, answers):
         gold = answer_by_key.get(key)
         if gold is None:
             continue
-        official_score = official_direct_answer_score(pred, gold)
-        legacy_score = legacy_normalized_direct_answer_score(pred, gold)
+        if args.dataset_name == "pope":
+            official_score = yes_no_answer_score(pred, gold)
+            legacy_score = official_score
+        else:
+            official_score = official_direct_answer_score(pred, gold)
+            legacy_score = legacy_normalized_direct_answer_score(pred, gold)
         official_full_scores.append(official_score)
         legacy_all_scores.append(legacy_score)
         if key in official_keys:
@@ -4623,9 +4685,15 @@ def direct_answer_eval_report(args, answers):
     official_full_pct, official_full_sum, official_full_total = _summarize(official_full_scores)
     legacy_full_pct, legacy_full_sum, legacy_full_total = _summarize(legacy_all_scores)
 
-    primary_label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
+    if args.dataset_name == "pope":
+        primary_label = "POPE准确率"
+    else:
+        primary_label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
     if args.eval_all_direct_answers:
-        primary_label = "全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断"
+        if args.dataset_name == "pope":
+            primary_label = "全量POPE诊断"
+        else:
+            primary_label = "全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断"
         primary_pct, primary_sum, primary_total = official_full_pct, official_full_sum, official_full_total
     else:
         primary_pct, primary_sum, primary_total = official_pct, official_sum, official_total
@@ -4648,9 +4716,9 @@ def direct_answer_eval_report(args, answers):
         "legacy_full_sum": legacy_full_sum,
         "legacy_full_total": legacy_full_total,
         "lines": [
-            f"{'OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率'}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
-            f"旧指标@{'OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集'}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
-            f"{'全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断'}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
+            f"{'POPE准确率' if args.dataset_name == 'pope' else ('OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率')}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
+            f"旧指标@{'POPE' if args.dataset_name == 'pope' else ('OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集')}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
+            f"{'全量POPE诊断' if args.dataset_name == 'pope' else ('全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断')}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
             f"旧指标@全量诊断: {legacy_full_pct:.2f}% ({legacy_full_sum:.2f}/{legacy_full_total})",
         ],
     }
@@ -4663,7 +4731,10 @@ def official_da_eval_answers(args, answers):
     else:
         eval_keys = load_official_da_eval_keys(args)
         eval_answers = [a for a in answers if a[0] in eval_keys]
-        label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
+        if args.dataset_name == "pope":
+            label = "POPE准确率"
+        else:
+            label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
     if not eval_answers:
         return 0.0, 0.0, 0, label
     acc = sum(float(a[3]) for a in eval_answers)
@@ -4768,6 +4839,8 @@ def main():
     # 数据集准备
     if args.dataset_name == "okvqa":
         aokvqa_data = okvqa_dataset(args)
+    elif args.dataset_name == "pope":
+        aokvqa_data = pope_dataset(args)
     else:
         aokvqa_data = aokvqa_dataset(args)
 
