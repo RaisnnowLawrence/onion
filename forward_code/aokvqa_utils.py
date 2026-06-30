@@ -13,6 +13,7 @@ from transformers import GPT2Tokenizer
 import pdb
 import pickle
 import glob
+import io
 from transformers import CLIPProcessor, CLIPModel
 from transformers import CLIPTokenizer, CLIPTextModel
 from PIL import Image
@@ -544,6 +545,148 @@ class pope_dataset(aokvqa_dataset):
             if os.path.isfile(candidate):
                 return candidate
         return candidates[0]
+
+
+def load_mme_parquet_records(args, save_images=False):
+    """Load MME parquet records and optionally materialize embedded images."""
+    manifest_file = getattr(args, "mme_manifest_file", "")
+    if manifest_file and os.path.isfile(manifest_file):
+        records = []
+        with open(manifest_file, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                rec = json.loads(line)
+                records.append({
+                    "image_idx": int(rec["image_idx"]),
+                    "question_id": str(rec["question_id"]),
+                    "key": rec.get("key") or f"{int(rec['image_idx'])}<->{rec['question_id']}",
+                    "question": str(rec.get("question", "")),
+                    "answer": str(rec.get("answer", "")).lower(),
+                    "category": str(rec.get("category", "")),
+                    "image_path": rec["image_path"],
+                })
+        return records
+
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError("MME parquet loading requires pandas.") from exc
+
+    parquet_files = sorted(glob.glob(os.path.join(args.coco_path, f"{args.split_name}-*.parquet")))
+    if not parquet_files and args.split_name == "test":
+        parquet_files = sorted(glob.glob(os.path.join(args.coco_path, "test-*.parquet")))
+    if not parquet_files:
+        raise FileNotFoundError(f"No MME parquet files found under {args.coco_path} for split={args.split_name}")
+
+    image_cache_dir = os.path.join(args.cache_path, "mme_images")
+    if save_images:
+        os.makedirs(image_cache_dir, exist_ok=True)
+
+    records = []
+    row_offset = 0
+    for parquet_file in parquet_files:
+        try:
+            df = pd.read_parquet(parquet_file)
+        except ImportError as exc:
+            raise ImportError(
+                "MME parquet loading requires pyarrow or fastparquet in the active Python environment."
+            ) from exc
+        for local_idx, row in df.iterrows():
+            image_idx = row_offset + int(local_idx)
+            question_id = str(row.get("question_id", image_idx))
+            image_path = os.path.join(image_cache_dir, f"{image_idx:06d}.jpg")
+            if save_images and not os.path.isfile(image_path):
+                image_obj = row["image"]
+                if isinstance(image_obj, Image.Image):
+                    image = image_obj.convert("RGB")
+                elif isinstance(image_obj, dict):
+                    image_bytes = image_obj.get("bytes")
+                    if image_bytes is None and image_obj.get("path"):
+                        image = Image.open(image_obj["path"]).convert("RGB")
+                    else:
+                        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                elif isinstance(image_obj, (bytes, bytearray)):
+                    image = Image.open(io.BytesIO(image_obj)).convert("RGB")
+                else:
+                    raise TypeError(f"Unsupported MME image payload type: {type(image_obj)}")
+                image.save(image_path)
+            records.append({
+                "image_idx": image_idx,
+                "question_id": question_id,
+                "key": f"{image_idx}<->{question_id}",
+                "question": str(row.get("question", "")),
+                "answer": str(row.get("answer", "")).lower(),
+                "category": str(row.get("category", "")),
+                "image_path": image_path,
+            })
+        row_offset += len(df)
+    return records
+
+
+def load_mme_answer_annotations(args):
+    records = load_mme_parquet_records(args, save_images=False)
+    answer_by_key = {rec["key"]: [rec["answer"]] for rec in records}
+    return answer_by_key, set(answer_by_key)
+
+
+class mme_dataset(aokvqa_dataset):
+    """MME yes/no benchmark loader backed by local parquet files."""
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("MME is evaluated as a yes/no benchmark here; --choice_only is not supported.")
+
+        self.raw_image_dir = args.raw_image_dir
+        self.image_path_dict = {}
+        self.category_dict = {}
+
+        records = load_mme_parquet_records(args, save_images=True)
+        self.answer_dict = {}
+        self.question_dict = {}
+        self.rationale_dict = {}
+        self.choices_dict = {}
+        self.inputtext_dict = {}
+        for rec in records:
+            key = rec["key"]
+            image_idx = rec["image_idx"]
+            self.answer_dict[key] = [rec["answer"]]
+            self.question_dict[key] = rec["question"]
+            self.rationale_dict[key] = ""
+            self.choices_dict[key] = ["yes", "no"]
+            self.inputtext_dict[image_idx] = [""]
+            self.image_path_dict[image_idx] = rec["image_path"]
+            self.category_dict[key] = rec["category"]
+
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+
+        # MME has no train split in this local release; experiments use n_shot=0.
+        self.traincontext_caption_dict = {}
+        self.traincontext_answer_dict = {}
+        self.traincontext_question_dict = {}
+        self.traincontext_rationale_dict = {}
+        self.traincontext_choices_dict = {}
+        self.traincontext_interactive_answer_dict = {}
+        self.traincontext_interactive_question_dict = {}
+        self.train_keys = []
+        self.train_interactive_keys = []
+
+        self.sg_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_attr_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_cap_dir = os.path.join(self.args.sg_path, self.args.concept_caption_path)
+
+        self.train_ocr_text = {}
+        self.val_ocr_text = {}
+
+    def load_similarity(self):
+        self.valkey2idx = {}
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        return self.image_path_dict[int(img_key)]
 
 # 根据图片id加载图片
 def find_image(args, img_key):

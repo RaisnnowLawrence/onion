@@ -27,7 +27,7 @@ from lang_sam import LangSAM
 
 from sam_utils import process_langsam_results_to_visualization, combine_masks_max_simple, clean_string_basic
 
-from aokvqa_utils import aokvqa_dataset, okvqa_dataset, pope_dataset
+from aokvqa_utils import aokvqa_dataset, okvqa_dataset, pope_dataset, mme_dataset, load_mme_answer_annotations
 from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible
 from mcts import MCTSQuestionSample
 from official_vqa_answer_processor import normalize_vqa_answer
@@ -98,14 +98,15 @@ class onion:
         # 引擎初始化
         self.initialize_qwen(self.args.engine)
 
-        # 图像处理部分初始化
-        self.initialize_lang_sam()
+        # 图像处理部分按需初始化。Direct/非视觉增强实验不需要加载
+        # GroundingDINO + SAM，否则多 shard 同时启动时容易产生很高的显存峰值。
+        self.sam = None
 
         # 加载caption部分
         self.caption_qwen = self.load_caption_qwen()
 
-        # 加载wit外部知识
-        self.wit_knowkedge = self.load_wit_knowkedge()
+        # 加载 WIT 外部知识。只有知识增强路线需要这份较大的本地知识表。
+        self.wit_knowkedge = self.load_wit_knowkedge() if args.use_knowledge_enhance else {}
 
         if getattr(args, "strategy_profile_path", ""):
             self.strategy_profile = self.load_strategy_profile(args.strategy_profile_path)
@@ -193,7 +194,7 @@ class onion:
         return answer
 
     def _format_direct_answer_instruction(self, question, prompt_before_answer):
-        if getattr(self.args, "dataset_name", "") == "pope":
+        if getattr(self.args, "dataset_name", "") in ("pope", "mme"):
             return (
                 "=== Answer with only yes or no.\n"
                 "%s" % prompt_before_answer
@@ -1891,7 +1892,12 @@ class onion:
         scene_graph_path = os.path.join(self.dataset.sg_attr_dir, str(image_key).zfill(12) + ".json")
 
         # 这个位置获取scene_graph_attr,加载场景图信息
-        scene_graph_attr = json.load(open(scene_graph_path))
+        if getattr(self.args, "dataset_name", "") == "mme":
+            scene_graph_attr = [[]]
+        elif os.path.isfile(scene_graph_path):
+            scene_graph_attr = json.load(open(scene_graph_path))
+        else:
+            scene_graph_attr = [[]]
         
         # 如果采用caption策略，则加载或生成场景图对应的文本描述（caption）
         if self.args.iterative_strategy == "caption":
@@ -2061,6 +2067,8 @@ class onion:
         # 2. 准备当前问题的候选对象列表 这里使用了去重
         obj_list = [obj[1] for obj in attr_list][:25]  # 从attr_list中提取对象名称，只要前25个
         unique_obj_list = list(dict.fromkeys(obj_list))
+        if not unique_obj_list:
+            return [], []
 
         # 设置要选择的实体数量
         n_select = min(3, len(unique_obj_list))  # 默认选择3个，但不超过选项总数
@@ -3071,7 +3079,7 @@ class onion:
                 pred_answer = self.choices_dict[key][sim.argmax().item()]
             final_score = 1 if pred_answer == self.choices_dict[key][answer] else 0
         else:
-            if self.args.dataset_name == "pope":
+            if self.args.dataset_name in ("pope", "mme"):
                 final_score = yes_no_answer_score(pred_answer, answer)
             elif self.args.legacy_answer_normalization:
                 final_score = legacy_normalized_direct_answer_score(pred_answer, answer)
@@ -3236,6 +3244,8 @@ class onion:
         return any(pattern in q for pattern in visual_patterns)
 
     def _dyfo_should_trigger(self, question, question_type):
+        if getattr(self.args, "dataset_name", "") == "mme":
+            return True
         mode = getattr(self.args, "dyfo_trigger_mode", "visual_detail")
         if mode == "always":
             return True
@@ -3261,12 +3271,25 @@ class onion:
             text = lines[-1] if lines else str(fallback)
         text = re.sub(r"^\s*(?:[-*]|\d+[\).:])\s*", "", text).strip()
         text = text.strip(" \t\"'`.,;:!?")
-        if not text or len(text.split()) > 12:
+        if not text or text.lower() in ("none", "n/a", "na", "unknown") or len(text.split()) > 12:
             return str(fallback).strip()
         return text
 
+    def _dyfo_question_focus_fallback(self, question):
+        focus = re.sub(r"\bplease answer yes or no\b", "", str(question), flags=re.IGNORECASE)
+        focus = re.sub(r"\b(answer|reply) (with )?(only )?(yes|no|yes or no)\b", "", focus, flags=re.IGNORECASE)
+        focus = focus.strip(" ?.")
+        focus = re.sub(r"^(is|are|was|were|do|does|did|can|could|would|will|has|have|had)\s+", "", focus, flags=re.IGNORECASE)
+        focus = re.sub(r"^(there|this|that|the image|the picture|a photo|this photo)\s+", "", focus, flags=re.IGNORECASE)
+        focus = focus.strip(" ?.")
+        words = focus.split()
+        if len(words) > 8:
+            focus = " ".join(words[:8])
+        return focus or "the visual evidence needed by the question"
+
     def _dyfo_initial_focus(self, question, obj_list):
-        object_hint = ", ".join(obj_list[:8]) if obj_list else "none"
+        fallback = obj_list[0] if obj_list else self._dyfo_question_focus_fallback(question)
+        object_hint = ", ".join(obj_list[:8]) if obj_list else "No detector candidates are available; infer the cue from the question."
         prompt = (
             "Choose the most useful visual focus cue for answering the question.\n"
             "The focus should be a visible object, attribute, text area, relation, or small region that a visual expert can localize.\n"
@@ -3275,7 +3298,6 @@ class onion:
             "Candidate objects: %s"
         ) % (question, object_hint)
         response = self._call_llm(prompt, image_path=None, max_new_tokens=self.args.dyfo_focus_max_tokens, use_images=False)
-        fallback = obj_list[0] if obj_list else question
         return self._parse_dyfo_focus_text(response, fallback), response
 
     def _dyfo_refine_focus(self, question, current_focus, action, image_path):
@@ -3307,6 +3329,7 @@ class onion:
         if image_pil.mode != "RGB":
             image_pil = image_pil.convert("RGB")
         try:
+            self.ensure_lang_sam()
             with torch.no_grad():
                 result = self.sam.predict([image_pil], [focus_text])
         except Exception as exc:
@@ -3391,15 +3414,25 @@ class onion:
             )
             os.makedirs(self.args.cache_path, exist_ok=True)
             crop.save(temp_path)
-            prompt = (
-                "Answer the visual question using this focused image region.\n"
-                "Use the visual focus as a hint, but answer the original question.\n"
-                "If the crop is insufficient, make the best concise answer from visible evidence.\n"
-                "Return only one word or a short phrase.\n"
-                "Question: %s\n"
-                "Visual focus: %s\n"
-                "Answer:"
-            ) % (question, focus_text)
+            if getattr(self.args, "dataset_name", "") in ("pope", "mme"):
+                prompt = (
+                    "Answer the visual question using this focused image region.\n"
+                    "Use the visual focus as a hint, but answer the original question.\n"
+                    "Return only yes or no.\n"
+                    "Question: %s\n"
+                    "Visual focus: %s\n"
+                    "Answer:"
+                ) % (question, focus_text)
+            else:
+                prompt = (
+                    "Answer the visual question using this focused image region.\n"
+                    "Use the visual focus as a hint, but answer the original question.\n"
+                    "If the crop is insufficient, make the best concise answer from visible evidence.\n"
+                    "Return only one word or a short phrase.\n"
+                    "Question: %s\n"
+                    "Visual focus: %s\n"
+                    "Answer:"
+                ) % (question, focus_text)
             response = self._call_llm(
                 prompt,
                 image_path=temp_path,
@@ -3665,6 +3698,8 @@ class onion:
         if not self._mcts_should_trigger(question):
             print(f"MCTS跳过：问题不属于触发模式 {self.args.mcts_trigger_mode}: {question}")
             return None
+
+        self.ensure_lang_sam()
 
         # ========== MCTS搜索最优物体增强 ==========
         # 将图像转为base64
@@ -4024,6 +4059,8 @@ class onion:
         return False
     
     def load_caption_qwen(self):
+        if getattr(self.args, "dataset_name", "") == "mme":
+            return {}
         file_path = '/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/caption_onion/aokvqa_val_caption_8b_256.json'
         if not os.path.isfile(file_path):
             print(f"[caption_qwen] missing caption file, continue with empty captions: {file_path}")
@@ -4046,6 +4083,8 @@ class onion:
         Returns:
             list: 包含n个最相似训练样本键值的列表，如果metric参数无效则返回None
         """
+        if n <= 0 or not getattr(self.dataset, "valkey2idx", None):
+            return []
         
         if metric == 'question':
             # 仅基于问题相似度检索上下文样本
@@ -4233,6 +4272,10 @@ class onion:
             self.sam = LangSAM(
                 gdino_model_ckpt_path="/data2/lizhengxue/WorkSpace/huchunning/Model-Database/grounding-dino-base", 
                 gdino_processor_ckpt_path="/data2/lizhengxue/WorkSpace/huchunning/Model-Database/grounding-dino-base")
+
+    def ensure_lang_sam(self):
+        if self.sam is None:
+            self.initialize_lang_sam()
             
 
 
@@ -4529,7 +4572,7 @@ def parser_args():
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
     # 数据集选择-验证测试
-    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa, pope')
+    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa, pope, mme')
     parser.add_argument('--split_name', type=str, default='val', help='train, val, test')
     # 描述文本选择
     parser.add_argument('--caption_type', type=str, default='vinvl_tag', help='vinvl_tag, vinvl, vinvl_sg, vinvl_ocr')
@@ -4552,6 +4595,8 @@ def parser_args():
     parser.add_argument('--aokvqa_context_path', type=str,
                         default='/data2/lizhengxue/datasets/aokvqa',
                         help='A-OKVQA annotation directory reused as few-shot context for datasets without train annotations')
+    parser.add_argument('--mme_manifest_file', type=str, default='',
+                        help='Prepared MME jsonl manifest with materialized image paths.')
     parser.add_argument('--valcaption_file', type=str, default='/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/input_text/vinvl_caption/VinVL_base_val2014.tsv')
 
     args = parser.parse_args()
@@ -4560,6 +4605,9 @@ def parser_args():
 
 
 def load_official_da_eval_keys(args):
+    if args.dataset_name == "mme":
+        answer_by_key, official_keys = load_mme_answer_annotations(args)
+        return official_keys
     if args.dataset_name == "pope":
         answer_by_key, official_keys = load_direct_answer_annotations(args)
         return official_keys
@@ -4587,6 +4635,9 @@ def load_official_da_eval_keys(args):
 
 
 def load_direct_answer_annotations(args):
+    if args.dataset_name == "mme":
+        return load_mme_answer_annotations(args)
+
     if args.dataset_name == "pope":
         subsets = ["random", "popular", "adversarial"] if args.split_name == "all" else [args.split_name]
         answer_by_key = {}
@@ -4662,7 +4713,7 @@ def direct_answer_eval_report(args, answers):
         gold = answer_by_key.get(key)
         if gold is None:
             continue
-        if args.dataset_name == "pope":
+        if args.dataset_name in ("pope", "mme"):
             official_score = yes_no_answer_score(pred, gold)
             legacy_score = official_score
         else:
@@ -4687,11 +4738,15 @@ def direct_answer_eval_report(args, answers):
 
     if args.dataset_name == "pope":
         primary_label = "POPE准确率"
+    elif args.dataset_name == "mme":
+        primary_label = "MME准确率"
     else:
         primary_label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
     if args.eval_all_direct_answers:
         if args.dataset_name == "pope":
             primary_label = "全量POPE诊断"
+        elif args.dataset_name == "mme":
+            primary_label = "全量MME诊断"
         else:
             primary_label = "全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断"
         primary_pct, primary_sum, primary_total = official_full_pct, official_full_sum, official_full_total
@@ -4716,9 +4771,9 @@ def direct_answer_eval_report(args, answers):
         "legacy_full_sum": legacy_full_sum,
         "legacy_full_total": legacy_full_total,
         "lines": [
-            f"{'POPE准确率' if args.dataset_name == 'pope' else ('OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率')}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
-            f"旧指标@{'POPE' if args.dataset_name == 'pope' else ('OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集')}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
-            f"{'全量POPE诊断' if args.dataset_name == 'pope' else ('全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断')}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
+            f"{'POPE准确率' if args.dataset_name == 'pope' else ('MME准确率' if args.dataset_name == 'mme' else ('OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率'))}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
+            f"旧指标@{'POPE' if args.dataset_name == 'pope' else ('MME' if args.dataset_name == 'mme' else ('OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集'))}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
+            f"{'全量POPE诊断' if args.dataset_name == 'pope' else ('全量MME诊断' if args.dataset_name == 'mme' else ('全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断'))}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
             f"旧指标@全量诊断: {legacy_full_pct:.2f}% ({legacy_full_sum:.2f}/{legacy_full_total})",
         ],
     }
@@ -4733,6 +4788,8 @@ def official_da_eval_answers(args, answers):
         eval_answers = [a for a in answers if a[0] in eval_keys]
         if args.dataset_name == "pope":
             label = "POPE准确率"
+        elif args.dataset_name == "mme":
+            label = "MME准确率"
         else:
             label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
     if not eval_answers:
@@ -4841,6 +4898,8 @@ def main():
         aokvqa_data = okvqa_dataset(args)
     elif args.dataset_name == "pope":
         aokvqa_data = pope_dataset(args)
+    elif args.dataset_name == "mme":
+        aokvqa_data = mme_dataset(args)
     else:
         aokvqa_data = aokvqa_dataset(args)
 
