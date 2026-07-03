@@ -467,6 +467,56 @@ class okvqa_dataset(aokvqa_dataset):
         )
 
 
+class vqav2_dataset(okvqa_dataset):
+    """VQAv2 open-ended loader with the same runtime interface as OK-VQA."""
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("VQAv2 is open-ended VQA in this project; --choice_only is not supported.")
+
+        split = args.split_name
+        if split not in ("train", "val"):
+            raise ValueError(f"VQAv2 loader currently supports train/val annotations, got split_name={split}")
+
+        _, self.answer_dict, self.question_dict = self.load_ok_anno(
+            None,
+            f"{args.coco_path}/v2_mscoco_{split}2014_annotations.json",
+            f"{args.coco_path}/v2_OpenEnded_mscoco_{split}2014_questions.json",
+        )
+        self.rationale_dict = {key: "" for key in self.question_dict}
+        self.choices_dict = {}
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+
+        self.inputtext_dict = self.load_cachetext()
+
+        _, self.traincontext_answer_dict, self.traincontext_question_dict = self.load_ok_anno(
+            None,
+            f"{args.coco_path}/v2_mscoco_train2014_annotations.json",
+            f"{args.coco_path}/v2_OpenEnded_mscoco_train2014_questions.json",
+        )
+        self.traincontext_rationale_dict = {key: "" for key in self.traincontext_question_dict}
+        self.traincontext_choices_dict = {}
+        train_image_ids = {int(key.split("<->")[0]) for key in self.traincontext_question_dict}
+        self.traincontext_caption_dict = {image_id: [""] for image_id in train_image_ids}
+        self.traincontext_interactive_answer_dict = self.traincontext_answer_dict
+        self.traincontext_interactive_question_dict = self.traincontext_question_dict
+
+        self.train_keys = list(self.traincontext_answer_dict.keys())
+        self.train_interactive_keys = self.train_keys
+
+        self.sg_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_attr_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_cap_dir = os.path.join(self.args.sg_path, self.args.concept_caption_path)
+
+        self.train_ocr_text = {}
+        self.val_ocr_text = {}
+
+    def load_similarity(self):
+        self.valkey2idx = {key: idx for idx, key in enumerate(self.val_keys)}
+        self.train_idx = {str(idx): key for idx, key in enumerate(getattr(self, "train_keys", []))}
+
+
 class pope_dataset(aokvqa_dataset):
     """POPE yes/no hallucination benchmark loader.
 
@@ -630,6 +680,76 @@ def load_mme_answer_annotations(args):
     return answer_by_key, set(answer_by_key)
 
 
+def _hallusionbench_answer_text(raw_answer):
+    answer = str(raw_answer).strip().lower()
+    if answer in ("1", "yes", "true"):
+        return "yes"
+    if answer in ("0", "no", "false"):
+        return "no"
+    return answer
+
+
+def load_hallusionbench_records(args):
+    """Load the visual subset of HallusionBench.
+
+    HallusionBench contains both image-grounded and text-only examples. The
+    onion visual pipeline and DyFo variants require an image, so records without
+    a filename are skipped here.
+    """
+    anno_file = os.path.join(args.coco_path, "HallusionBench.json")
+    with open(anno_file, "r") as f:
+        samples = json.load(f)
+
+    image_root = os.path.join(args.coco_path, "hallusion_bench")
+    records = []
+    skipped_text_only = 0
+    for sample in samples:
+        filename = sample.get("filename")
+        if not filename:
+            skipped_text_only += 1
+            continue
+        image_idx = len(records)
+        question_id = str(sample.get("question_id", image_idx))
+        set_id = str(sample.get("set_id", ""))
+        figure_id = str(sample.get("figure_id", ""))
+        category = str(sample.get("category", ""))
+        subcategory = str(sample.get("subcategory", ""))
+        key_suffix = "_".join(
+            part.replace(" ", "-")
+            for part in [category, subcategory, set_id, figure_id, question_id]
+            if part != ""
+        )
+        key = f"{image_idx}<->{key_suffix or question_id}"
+        image_path = os.path.join(image_root, str(filename).lstrip("./"))
+        records.append({
+            "image_idx": image_idx,
+            "question_id": question_id,
+            "key": key,
+            "question": str(sample.get("question", "")),
+            "answer": _hallusionbench_answer_text(sample.get("gt_answer", "")),
+            "category": category,
+            "subcategory": subcategory,
+            "visual_input": str(sample.get("visual_input", "")),
+            "set_id": set_id,
+            "figure_id": figure_id,
+            "sample_note": str(sample.get("sample_note", "")),
+            "gt_answer_details": str(sample.get("gt_answer_details", "")),
+            "image_path": image_path,
+        })
+
+    print(
+        f"[HallusionBench] loaded {len(records)} visual samples; "
+        f"skipped {skipped_text_only} text-only samples without images."
+    )
+    return records
+
+
+def load_hallusionbench_answer_annotations(args):
+    records = load_hallusionbench_records(args)
+    answer_by_key = {rec["key"]: [rec["answer"]] for rec in records}
+    return answer_by_key, set(answer_by_key)
+
+
 class mme_dataset(aokvqa_dataset):
     """MME yes/no benchmark loader backed by local parquet files."""
 
@@ -662,6 +782,76 @@ class mme_dataset(aokvqa_dataset):
         self.direct_answer_eval_keys = set(self.val_keys)
 
         # MME has no train split in this local release; experiments use n_shot=0.
+        self.traincontext_caption_dict = {}
+        self.traincontext_answer_dict = {}
+        self.traincontext_question_dict = {}
+        self.traincontext_rationale_dict = {}
+        self.traincontext_choices_dict = {}
+        self.traincontext_interactive_answer_dict = {}
+        self.traincontext_interactive_question_dict = {}
+        self.train_keys = []
+        self.train_interactive_keys = []
+
+        self.sg_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_attr_dir = os.path.join(self.args.sg_path, "scene_graph_coco17_attr")
+        self.sg_cap_dir = os.path.join(self.args.sg_path, self.args.concept_caption_path)
+
+        self.train_ocr_text = {}
+        self.val_ocr_text = {}
+
+    def load_similarity(self):
+        self.valkey2idx = {}
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        return self.image_path_dict[int(img_key)]
+
+
+class hallusionbench_dataset(aokvqa_dataset):
+    """HallusionBench yes/no benchmark loader for image-grounded examples."""
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("HallusionBench is evaluated as a yes/no benchmark here; --choice_only is not supported.")
+
+        self.raw_image_dir = args.raw_image_dir
+        self.image_path_dict = {}
+        self.category_dict = {}
+        self.metadata_dict = {}
+
+        records = load_hallusionbench_records(args)
+        self.answer_dict = {}
+        self.question_dict = {}
+        self.rationale_dict = {}
+        self.choices_dict = {}
+        self.inputtext_dict = {}
+        for rec in records:
+            key = rec["key"]
+            image_idx = rec["image_idx"]
+            self.answer_dict[key] = [rec["answer"]]
+            self.question_dict[key] = rec["question"]
+            self.rationale_dict[key] = ""
+            self.choices_dict[key] = ["yes", "no"]
+            self.inputtext_dict[image_idx] = [""]
+            self.image_path_dict[image_idx] = rec["image_path"]
+            self.category_dict[key] = rec["category"]
+            self.metadata_dict[key] = {
+                "category": rec["category"],
+                "subcategory": rec["subcategory"],
+                "visual_input": rec["visual_input"],
+                "set_id": rec["set_id"],
+                "figure_id": rec["figure_id"],
+                "sample_note": rec["sample_note"],
+                "gt_answer_details": rec["gt_answer_details"],
+                "image_path": rec["image_path"],
+            }
+
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+
+        # HallusionBench has no train split in this local release; experiments use n_shot=0.
         self.traincontext_caption_dict = {}
         self.traincontext_answer_dict = {}
         self.traincontext_question_dict = {}

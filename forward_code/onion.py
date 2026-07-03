@@ -15,6 +15,8 @@ from transformers import GPT2Tokenizer
 import pdb
 import pickle
 import glob
+import gzip
+import heapq
 from transformers import CLIPProcessor, CLIPModel
 from transformers import CLIPTokenizer, CLIPTextModel
 from PIL import Image
@@ -27,7 +29,16 @@ from lang_sam import LangSAM
 
 from sam_utils import process_langsam_results_to_visualization, combine_masks_max_simple, clean_string_basic
 
-from aokvqa_utils import aokvqa_dataset, okvqa_dataset, pope_dataset, mme_dataset, load_mme_answer_annotations
+from aokvqa_utils import (
+    aokvqa_dataset,
+    okvqa_dataset,
+    vqav2_dataset,
+    pope_dataset,
+    mme_dataset,
+    hallusionbench_dataset,
+    load_mme_answer_annotations,
+    load_hallusionbench_answer_annotations,
+)
 from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible
 from mcts import MCTSQuestionSample
 from official_vqa_answer_processor import normalize_vqa_answer
@@ -88,6 +99,9 @@ class onion:
         self.qwen_local_caption_cache = {}
         self.external_knowledge_corpus = None
         self.external_knowledge_index = None
+        self.external_knowledge_source_counts = {}
+        self.sample_knowledge_cache = None
+        self.wikidata_kat_cache = None
         self.strategy_profile = {}
         self.val_ocr_text = getattr(dataset, "val_ocr_text", {})
         self.train_ocr_text = getattr(dataset, "train_ocr_text", {})
@@ -194,7 +208,7 @@ class onion:
         return answer
 
     def _format_direct_answer_instruction(self, question, prompt_before_answer):
-        if getattr(self.args, "dataset_name", "") in ("pope", "mme"):
+        if getattr(self.args, "dataset_name", "") in ("pope", "mme", "hallusionbench"):
             return (
                 "=== Answer with only yes or no.\n"
                 "%s" % prompt_before_answer
@@ -1246,6 +1260,193 @@ class onion:
             "Final Answer:"
         ) % (policy_text, cur_caption, question, choice_text, initial_answer)
 
+    def _knowledge_direct_is_weak(self, answer):
+        cleaned = self._clean_short_answer(answer)
+        norm = self._normalize_candidate_answer(cleaned)
+        weak_answers = {
+            "", "unknown", "unsure", "not sure", "cannot tell", "cant tell", "i dont know",
+            "object", "thing", "person", "people", "animal", "food", "vehicle", "item",
+        }
+        return norm in weak_answers or self._looks_like_visual_cue_list(cleaned)
+
+    def _should_run_notemr_candidate(self, question, question_type, direct_answer):
+        mode = getattr(self.args, "notemr_candidate_trigger", "knowledge_qtype_or_weak")
+        if mode == "always":
+            return True, "always"
+        if mode == "never":
+            return False, "never"
+        is_knowledge_like = question_type in ("knowledge", "category")
+        direct_weak = self._knowledge_direct_is_weak(direct_answer)
+        if mode == "knowledge_qtype":
+            return is_knowledge_like, "knowledge_qtype" if is_knowledge_like else "not_knowledge_qtype"
+        if mode == "weak_direct":
+            return direct_weak, "weak_direct" if direct_weak else "direct_not_weak"
+        if is_knowledge_like or direct_weak:
+            reason = "knowledge_qtype" if is_knowledge_like else "weak_direct"
+            return True, reason
+        return False, "direct_safe_nonknowledge"
+
+    def _format_notemr_note_relevance_prompt(self, question, choice_text, direct_answer, knowledge_notes):
+        return (
+            "You are checking whether Knowledge Notes should be allowed to influence a VQA answer.\n"
+            "Be strict. The original image is the primary evidence. Knowledge Notes are only helpful if they are "
+            "clearly relevant to both the image-question pair and the expected answer.\n"
+            "Reject notes that are generic, off-topic, merely caption-like, or introduce unsupported entities.\n"
+            "Question: %s%s\n"
+            "Current direct answer: %s\n"
+            "Knowledge Notes:\n%s\n"
+            "Output exactly:\n"
+            "Relevant: yes / no\n"
+            "Reason: <short reason>\n"
+        ) % (
+            question,
+            choice_text,
+            self._clean_short_answer(direct_answer),
+            self._truncate_text(knowledge_notes, self.args.knowledge_notes_max_chars),
+        )
+
+    def _extract_notemr_relevance(self, response, knowledge_notes):
+        text = str(response or "").strip()
+        first_lines = "\n".join(text.splitlines()[:3]).lower()
+        notes_l = str(knowledge_notes or "").lower()
+        negative_note_markers = (
+            "no useful external knowledge", "not relevant", "irrelevant", "unrelated",
+            "no relevant", "no extra knowledge"
+        )
+        if any(marker in notes_l for marker in negative_note_markers):
+            return False
+        if re.search(r"relevant\s*:\s*yes", first_lines, flags=re.IGNORECASE):
+            return True
+        return False
+
+    def _format_notemr_candidate_prompt(self, question, choice_text, direct_answer, knowledge_notes):
+        return (
+            "Answer the visual question with a single word or short phrase.\n"
+            "Use the original image as the main evidence. Use the Knowledge Notes only as background when they "
+            "directly clarify the visible scene or object. Do not answer from knowledge alone.\n"
+            "If the Knowledge Notes are not useful, repeat the direct answer.\n"
+            "Direct answer: %s\n"
+            "Knowledge Notes:\n%s\n"
+            "Question: %s%s\n"
+            "Answer:"
+        ) % (
+            self._clean_short_answer(direct_answer),
+            self._truncate_text(knowledge_notes, self.args.knowledge_notes_max_chars),
+            question,
+            choice_text,
+        )
+
+    def _format_notemr_conservative_judge_prompt(self, question, choice_text, direct_answer,
+                                                 knowledge_answer, knowledge_notes, relevance_response):
+        return (
+            "You are a conservative VQA answer arbiter.\n"
+            "Default decision: keep the direct answer.\n"
+            "Use the knowledge candidate only when all conditions are true:\n"
+            "1. The Knowledge Notes are clearly relevant to the image and question.\n"
+            "2. The direct answer is weak, generic, or misses the asked concept.\n"
+            "3. The knowledge candidate is a short answer and is better supported by the image-question pair.\n"
+            "4. The knowledge candidate does not introduce an unsupported specific entity.\n"
+            "If uncertain, keep direct.\n"
+            "Question: %s%s\n"
+            "Direct answer: %s\n"
+            "Knowledge candidate answer: %s\n"
+            "Knowledge Notes:\n%s\n"
+            "Relevance check:\n%s\n"
+            "Output exactly:\n"
+            "Decision: keep_direct / use_knowledge_candidate\n"
+            "Reason: <short reason>\n"
+            "Final Answer:"
+        ) % (
+            question,
+            choice_text,
+            self._clean_short_answer(direct_answer),
+            self._clean_short_answer(knowledge_answer),
+            self._truncate_text(knowledge_notes, self.args.knowledge_notes_max_chars),
+            self._truncate_text(relevance_response, 500),
+        )
+
+    def _extract_notemr_judge_answer(self, response, direct_answer, knowledge_answer):
+        text = str(response or "").strip()
+        first_lines = "\n".join(text.splitlines()[:4]).lower()
+        direct_answer = self._clean_short_answer(direct_answer)
+        knowledge_answer = self._clean_short_answer(knowledge_answer)
+        if "decision: use_knowledge_candidate" not in first_lines:
+            return direct_answer
+        final_answer = self._extract_structured_cot_answer(text)
+        final_norm = self._normalize_candidate_answer(final_answer)
+        knowledge_norm = self._normalize_candidate_answer(knowledge_answer)
+        if knowledge_norm and final_norm == knowledge_norm and not self._looks_like_visual_cue_list(knowledge_answer):
+            return knowledge_answer
+        return direct_answer
+
+    def _run_notemr_conservative_candidate(self, question, choice_text, direct_answer, question_type,
+                                           image_path, data_row, object_list, attr_list):
+        direct_answer = self._clean_short_answer(direct_answer)
+        should_run, trigger_reason = self._should_run_notemr_candidate(question, question_type, direct_answer)
+        trace = {
+            "triggered": should_run,
+            "trigger_reason": trigger_reason,
+            "direct_answer": direct_answer,
+            "knowledge_notes": "",
+            "relevance_prompt": "",
+            "relevance_response": "",
+            "knowledge_candidate_prompt": "",
+            "knowledge_candidate_response": "",
+            "knowledge_candidate_answer": "",
+            "judge_prompt": "",
+            "judge_response": "",
+            "final_answer": direct_answer,
+        }
+        if not should_run:
+            return trace
+
+        notes = self.enhance_knowledge_object(data_row, object_list, attr_list)
+        notes = self._truncate_text(notes, self.args.knowledge_notes_max_chars)
+        trace["knowledge_notes"] = notes
+        if not notes:
+            return trace
+
+        relevance_prompt = self._format_notemr_note_relevance_prompt(
+            question, choice_text, direct_answer, notes
+        )
+        relevance_response = self._call_llm(
+            relevance_prompt, image_path=image_path, max_new_tokens=self.args.notemr_relevance_max_tokens
+        )
+        trace["relevance_prompt"] = relevance_prompt
+        trace["relevance_response"] = relevance_response
+        relevant = self._extract_notemr_relevance(relevance_response, notes)
+        if not relevant:
+            trace["trigger_reason"] += "|notes_rejected"
+            return trace
+
+        candidate_prompt = self._format_notemr_candidate_prompt(
+            question, choice_text, direct_answer, notes
+        )
+        candidate_response = self._call_llm(
+            candidate_prompt, image_path=image_path, max_new_tokens=self.args.notemr_candidate_max_tokens
+        )
+        knowledge_answer = self._clean_short_answer(self._extract_answer_from_response(candidate_response))
+        trace["knowledge_candidate_prompt"] = candidate_prompt
+        trace["knowledge_candidate_response"] = candidate_response
+        trace["knowledge_candidate_answer"] = knowledge_answer
+        if not knowledge_answer or self._looks_like_visual_cue_list(knowledge_answer):
+            return trace
+        if self._normalize_candidate_answer(knowledge_answer) == self._normalize_candidate_answer(direct_answer):
+            trace["final_answer"] = direct_answer
+            return trace
+
+        judge_prompt = self._format_notemr_conservative_judge_prompt(
+            question, choice_text, direct_answer, knowledge_answer, notes, relevance_response
+        )
+        judge_response = self._call_llm(
+            judge_prompt, image_path=image_path, max_new_tokens=self.args.notemr_judge_max_tokens
+        )
+        final_answer = self._extract_notemr_judge_answer(judge_response, direct_answer, knowledge_answer)
+        trace["judge_prompt"] = judge_prompt
+        trace["judge_response"] = judge_response
+        trace["final_answer"] = final_answer
+        return trace
+
     def _evidence_scope_enabled(self, kind):
         scope = getattr(self.args, "reviewer_evidence_scope", "all")
         if scope == "all":
@@ -1492,7 +1693,7 @@ class onion:
     def _format_cot_answer_prompt(self, prompt_before_answer):
         if self.args.cot_style in ("direct_verify", "reviewer_evidence", "candidate_judge", "rag_strategy_router",
                                    "protected_reflective", "multi_strategy_router",
-                                   "direct_rephrase_consistency"):
+                                   "direct_rephrase_consistency", "notemr_conservative_candidate"):
             return (
                 "=== Please answer directly with a single word or short phrase:\n"
                 "%s" % (prompt_before_answer)
@@ -2745,6 +2946,50 @@ class onion:
                         )
                         extracted_answer = rephrase_result["final_answer"]
                         response = rephrase_result["trace"]
+                    elif self.args.cot_style == "notemr_conservative_candidate":
+                        selected_objects = onion_instruction[1] if len(onion_instruction) > 1 else []
+                        initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+                        notemr_trace = self._run_notemr_conservative_candidate(
+                            question=question,
+                            choice_text=choice_text,
+                            direct_answer=initial_answer,
+                            question_type=question_type,
+                            image_path=image_path,
+                            data_row=data_row,
+                            object_list=selected_objects,
+                            attr_list=attr_list,
+                        )
+                        extracted_answer = notemr_trace["final_answer"]
+                        response = (
+                            "NoteMR Conservative Candidate\n"
+                            "Question Type: %s\n"
+                            "Triggered: %s\n"
+                            "Trigger Reason: %s\n"
+                            "Initial Direct Answer: %s\n"
+                            "Knowledge Notes:\n%s\n"
+                            "Relevance Prompt:\n%s\n"
+                            "Relevance Response:\n%s\n"
+                            "Knowledge Candidate Prompt:\n%s\n"
+                            "Knowledge Candidate Response:\n%s\n"
+                            "Knowledge Candidate Answer: %s\n"
+                            "Judge Prompt:\n%s\n"
+                            "Judge Response:\n%s\n"
+                            "Final Answer: %s"
+                        ) % (
+                            question_type,
+                            notemr_trace.get("triggered"),
+                            notemr_trace.get("trigger_reason", ""),
+                            initial_answer,
+                            notemr_trace.get("knowledge_notes", ""),
+                            notemr_trace.get("relevance_prompt", ""),
+                            notemr_trace.get("relevance_response", ""),
+                            notemr_trace.get("knowledge_candidate_prompt", ""),
+                            notemr_trace.get("knowledge_candidate_response", ""),
+                            notemr_trace.get("knowledge_candidate_answer", ""),
+                            notemr_trace.get("judge_prompt", ""),
+                            notemr_trace.get("judge_response", ""),
+                            extracted_answer,
+                        )
                     elif self.args.cot_style == "candidate_judge":
                         selected_objects = onion_instruction[1] if len(onion_instruction) > 1 else []
                         initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
@@ -3813,12 +4058,32 @@ class onion:
         obj_list = list(dict.fromkeys(self.attention_object + obj_list))
 
         mode = self.args.knowledge_notes_mode
+        cached_record = self._sample_knowledge_cache_record(key, data_row)
+
+        if cached_record and mode in ("notes", "hybrid"):
+            cached_note = str(
+                cached_record.get("knowledge_note")
+                or cached_record.get("note")
+                or cached_record.get("notes")
+                or ""
+            ).strip()
+            if cached_note:
+                if mode == "hybrid":
+                    cached_items = self._knowledge_items_from_cache_record(cached_record)
+                    retrieved_text = self._format_retrieved_knowledge(cached_items, self.args.knowledge_raw_max_chars)
+                    if retrieved_text:
+                        return "Knowledge Notes: %s\nRetrieved Knowledge: %s" % (
+                            self._truncate_text(cached_note, self.args.knowledge_notes_max_chars),
+                            self._truncate_text(retrieved_text, self.args.knowledge_raw_max_chars),
+                        )
+                return self._truncate_text(cached_note, self.args.knowledge_notes_max_chars)
+
         if mode == "legacy":
             return self._legacy_generate_knowledge(data_row, obj_list, image_path)
 
         retrieved_items = []
         if mode in ("raw_retrieved", "notes", "hybrid"):
-            retrieved_items = self.retrieve_knowledge_notes_candidates(question, obj_list)
+            retrieved_items = self.retrieve_knowledge_notes_candidates(question, obj_list, data_row=data_row)
 
         if mode == "raw_retrieved":
             knowledge = self._format_retrieved_knowledge(retrieved_items, self.args.knowledge_raw_max_chars)
@@ -3870,7 +4135,7 @@ class onion:
         if isinstance(record, str):
             return record
         if isinstance(record, dict):
-            title = str(record.get("title") or record.get("name") or record.get("key") or "").strip()
+            title = str(record.get("title") or record.get("name") or record.get("key") or record.get("id") or "").strip()
             text = str(record.get("text") or record.get("contents") or record.get("description") or record.get("passage") or "").strip()
             if title and text:
                 return "%s: %s" % (title, text)
@@ -3879,21 +4144,238 @@ class onion:
             return " ".join(str(x) for x in record)
         return str(record)
 
-    def _load_external_knowledge_corpus(self):
-        if self.external_knowledge_corpus is not None:
-            return self.external_knowledge_corpus
-
-        corpus = []
-        path = self.args.knowledge_corpus_file
+    def _load_sample_knowledge_cache(self):
+        if self.sample_knowledge_cache is not None:
+            return self.sample_knowledge_cache
+        cache = {}
+        path = getattr(self.args, "knowledge_cache_file", "")
         if not path:
-            self.external_knowledge_corpus = corpus
-            self.external_knowledge_index = []
-            return corpus
-
+            self.sample_knowledge_cache = cache
+            return cache
         if not os.path.isfile(path):
-            print(f"[knowledge_notes] missing external corpus file, skip: {path}")
-            self.external_knowledge_corpus = corpus
-            self.external_knowledge_index = []
+            print(f"[knowledge_cache] missing cache file, skip: {path}")
+            self.sample_knowledge_cache = cache
+            return cache
+
+        def add_record(record):
+            if not isinstance(record, dict):
+                return
+            keys = []
+            key = str(record.get("key") or "").strip()
+            if key:
+                keys.append(key)
+            image_id = record.get("image_id")
+            question_id = record.get("question_id") or record.get("qid")
+            if image_id is not None and question_id is not None:
+                keys.append(f"{image_id}<->{question_id}")
+            if question_id is not None:
+                keys.append(str(question_id))
+            for cache_key in keys:
+                cache[cache_key] = record
+
+        try:
+            if path.endswith(".jsonl"):
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            add_record(json.loads(line))
+            else:
+                data = json.load(open(path, "r", encoding="utf-8"))
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        if isinstance(value, dict):
+                            value = dict(value)
+                            value.setdefault("key", key)
+                            add_record(value)
+                elif isinstance(data, list):
+                    for record in data:
+                        add_record(record)
+        except Exception as e:
+            print(f"[knowledge_cache] failed to load {path}: {e}")
+
+        print(f"[knowledge_cache] loaded {len(cache)} lookup keys from {path}")
+        self.sample_knowledge_cache = cache
+        return cache
+
+    def _sample_knowledge_cache_record(self, key, data_row=None):
+        cache = self._load_sample_knowledge_cache()
+        if not cache:
+            return None
+        candidates = [str(key)]
+        if "<->" in str(key):
+            candidates.append(str(key).split("<->", 1)[1])
+        if data_row:
+            image_id = data_row.get("image_key") or data_row.get("image_id")
+            question_id = data_row.get("question_id")
+            if question_id is None and "<->" in str(key):
+                question_id = str(key).split("<->", 1)[1]
+            if image_id is not None and question_id is not None:
+                candidates.append(f"{image_id}<->{question_id}")
+            if question_id is not None:
+                candidates.append(str(question_id))
+        for candidate in candidates:
+            if candidate in cache:
+                return cache[candidate]
+        return None
+
+    def _knowledge_items_from_cache_record(self, record):
+        if not record:
+            return []
+        items = record.get("selected_knowledge") or record.get("ctxs") or record.get("knowledge") or []
+        if isinstance(items, str):
+            items = [{"source": "knowledge_cache", "title": "", "text": items, "score": 1.0}]
+        normalized = []
+        for rank, item in enumerate(items, start=1):
+            if isinstance(item, str):
+                item = {"text": item}
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or item.get("contents") or item.get("passage") or "").strip()
+            if not text:
+                continue
+            normalized.append({
+                "source": item.get("source", "knowledge_cache"),
+                "title": item.get("title") or item.get("id") or item.get("name") or "",
+                "text": text,
+                "score": float(item.get("score", 0.0) or 0.0),
+                "rank": item.get("rank", rank),
+            })
+        return normalized
+
+    def _selected_knowledge_sources(self):
+        raw_sources = str(getattr(self.args, "knowledge_sources", "") or "").strip()
+        if not raw_sources:
+            return ["custom"] if getattr(self.args, "knowledge_corpus_file", "") else []
+        aliases = {
+            "okvqa": ["gs112k", "wikidata_kat"],
+            "all": ["gs112k", "wikidata_kat", "wiki21m", "conceptnet"],
+            "all_okvqa": ["gs112k", "wikidata_kat", "wiki21m", "conceptnet"],
+        }
+        sources = []
+        for item in re.split(r"[,; ]+", raw_sources):
+            item = item.strip().lower()
+            if not item:
+                continue
+            expanded = aliases.get(item, [item])
+            for source in expanded:
+                if source not in sources:
+                    sources.append(source)
+        if getattr(self.args, "knowledge_corpus_file", "") and "custom" not in sources:
+            sources.append("custom")
+        return sources
+
+    def _resolve_knowledge_source_path(self, source):
+        root = getattr(self.args, "knowledge_dataset_root", "/data2/lizhengxue/datasets")
+        if source == "custom":
+            return getattr(self.args, "knowledge_corpus_file", "")
+        if source == "gs112k":
+            return getattr(self.args, "knowledge_gs112k_file", "") or os.path.join(root, "gs112k", "okvqa_full_clean_corpus.csv")
+        if source == "wiki21m":
+            return getattr(self.args, "knowledge_wiki21m_file", "") or os.path.join(root, "wiki21m", "psgs_w100.tsv")
+        if source == "conceptnet":
+            return getattr(self.args, "knowledge_conceptnet_file", "") or os.path.join(root, "conceptnet", "conceptnet-assertions-5.7.0.csv")
+        if source == "wikidata_kat":
+            return getattr(self.args, "knowledge_wikidata_kat_dir", "") or os.path.join(root, "wikidata_kat")
+        return source
+
+    def _open_text_auto(self, path):
+        if str(path).endswith(".gz"):
+            return gzip.open(path, "rt", encoding="utf-8", errors="ignore")
+        return open(path, "r", encoding="utf-8", errors="ignore")
+
+    def _add_knowledge_record(self, corpus, source, title, text, metadata=None):
+        text = str(text or "").strip()
+        if not text:
+            return
+        record = {
+            "source": source,
+            "title": str(title or ""),
+            "text": text,
+        }
+        if metadata:
+            record.update(metadata)
+        corpus.append(record)
+
+    def _conceptnet_node_text(self, node):
+        node = str(node)
+        match = re.match(r"/c/en/([^/]+)", node)
+        if not match:
+            return ""
+        return match.group(1).replace("_", " ")
+
+    def _iter_knowledge_source_records(self, source, path, max_records, scan_limit):
+        if source == "wikidata_kat":
+            return
+        if not path or not os.path.isfile(path):
+            print(f"[knowledge_notes] missing {source} corpus file, skip: {path}")
+            return
+
+        loaded = 0
+        scanned = 0
+        try:
+            if source == "gs112k":
+                with self._open_text_auto(path) as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        scanned += 1
+                        text = row.get("text") or row.get("contents") or ""
+                        title = row.get("kid") or row.get("id") or loaded
+                        if text:
+                            yield {"source": source, "title": title, "text": text}
+                            loaded += 1
+                        if loaded >= max_records or scanned >= scan_limit:
+                            break
+            elif source == "wiki21m":
+                with self._open_text_auto(path) as f:
+                    reader = csv.DictReader(f, delimiter="\t")
+                    for row in reader:
+                        scanned += 1
+                        text = row.get("text") or ""
+                        title = row.get("title") or row.get("id") or loaded
+                        if text:
+                            yield {"source": source, "title": title, "text": text}
+                            loaded += 1
+                        if loaded >= max_records or scanned >= scan_limit:
+                            break
+            elif source == "conceptnet":
+                with self._open_text_auto(path) as f:
+                    reader = csv.reader(f, delimiter="\t")
+                    for row in reader:
+                        scanned += 1
+                        if len(row) < 4:
+                            continue
+                        rel = row[1].replace("/r/", "").replace("_", " ")
+                        head = self._conceptnet_node_text(row[2])
+                        tail = self._conceptnet_node_text(row[3])
+                        if not head or not tail:
+                            if scanned >= scan_limit:
+                                break
+                            continue
+                        text = "%s %s %s" % (head, rel, tail)
+                        yield {"source": source, "title": rel, "text": text}
+                        loaded += 1
+                        if loaded >= max_records or scanned >= scan_limit:
+                            break
+            else:
+                with self._open_text_auto(path) as f:
+                    for line_id, line in enumerate(f):
+                        scanned += 1
+                        text = line.strip()
+                        if text:
+                            yield {"source": source, "title": str(line_id), "text": text}
+                            loaded += 1
+                        if loaded >= max_records or scanned >= scan_limit:
+                            break
+        except Exception as e:
+            print(f"[knowledge_notes] failed to load {source} corpus {path}: {e}")
+
+    def _load_custom_knowledge_corpus(self, path):
+        corpus = []
+        if not path:
+            return corpus
+        if not os.path.isfile(path):
+            print(f"[knowledge_notes] missing custom corpus file, skip: {path}")
             return corpus
 
         def add_record(key, value):
@@ -3901,9 +4383,7 @@ class onion:
                 text = " ".join(str(x) for x in value)
             else:
                 text = self._knowledge_record_text(value)
-            text = text.strip()
-            if text:
-                corpus.append({"title": str(key), "text": text})
+            self._add_knowledge_record(corpus, "custom", key, text)
 
         try:
             if path.endswith(".jsonl"):
@@ -3915,7 +4395,12 @@ class onion:
                         item = json.loads(line)
                         text = self._knowledge_record_text(item).strip()
                         if text:
-                            corpus.append(item if isinstance(item, dict) else {"text": text})
+                            if isinstance(item, dict):
+                                item = dict(item)
+                                item.setdefault("source", "custom")
+                                corpus.append(item)
+                            else:
+                                self._add_knowledge_record(corpus, "custom", "", text)
             elif path.endswith(".json"):
                 data = json.load(open(path, "r"))
                 if isinstance(data, dict):
@@ -3925,27 +4410,126 @@ class onion:
                     for item in data:
                         text = self._knowledge_record_text(item).strip()
                         if text:
-                            corpus.append(item if isinstance(item, dict) else {"text": text})
+                            if isinstance(item, dict):
+                                item = dict(item)
+                                item.setdefault("source", "custom")
+                                corpus.append(item)
+                            else:
+                                self._add_knowledge_record(corpus, "custom", "", text)
             else:
-                with open(path, "r") as f:
+                with self._open_text_auto(path) as f:
                     for line_id, line in enumerate(f):
-                        text = line.strip()
-                        if text:
-                            corpus.append({"title": str(line_id), "text": text})
+                        self._add_knowledge_record(corpus, "custom", line_id, line.strip())
         except Exception as e:
-            print(f"[knowledge_notes] failed to load corpus {path}: {e}")
-            corpus = []
+            print(f"[knowledge_notes] failed to load custom corpus {path}: {e}")
+        return corpus
+
+    def _load_external_knowledge_corpus(self):
+        if self.external_knowledge_corpus is not None:
+            return self.external_knowledge_corpus
+
+        corpus = []
+        source_counts = {}
+        max_records = max(1, int(getattr(self.args, "knowledge_source_max_records", 50000)))
+        scan_limit = max(max_records, int(getattr(self.args, "knowledge_source_scan_limit", 500000)))
+
+        for source in self._selected_knowledge_sources():
+            if source == "custom":
+                records = self._load_custom_knowledge_corpus(self._resolve_knowledge_source_path(source))
+            elif source == "wikidata_kat":
+                records = []
+                source_counts[source] = "per_sample"
+                continue
+            else:
+                path = self._resolve_knowledge_source_path(source)
+                records = list(self._iter_knowledge_source_records(source, path, max_records, scan_limit))
+            corpus.extend(records)
+            source_counts[source] = len(records)
 
         self.external_knowledge_corpus = corpus
         self.external_knowledge_index = [
             self._knowledge_tokenize(self._knowledge_record_text(record)) for record in corpus
         ]
-        print(f"[knowledge_notes] loaded external corpus: {path}, records={len(corpus)}")
+        self.external_knowledge_source_counts = source_counts
+        print(f"[knowledge_notes] loaded external corpora: sources={source_counts}, total_records={len(corpus)}")
         return corpus
 
-    def retrieve_knowledge_notes_candidates(self, question, obj_list):
+    def _load_wikidata_kat_cache(self):
+        if self.wikidata_kat_cache is not None:
+            return self.wikidata_kat_cache
+        base_dir = self._resolve_knowledge_source_path("wikidata_kat")
+        cache = {
+            "topentities": {},
+            "ontology": {},
+        }
+        if not base_dir or not os.path.isdir(base_dir):
+            print(f"[knowledge_notes] missing wikidata_kat directory, skip: {base_dir}")
+            self.wikidata_kat_cache = cache
+            return cache
+        try:
+            okvqa_dir = os.path.join(base_dir, "okvqa_kat", "okvqa")
+            for split in ("train2014", "val2014"):
+                path = os.path.join(okvqa_dir, split, f"wikidata_okvqa_{split}_topentities.pkl")
+                if os.path.isfile(path):
+                    cache["topentities"].update(pickle.load(open(path, "rb")))
+            ontology_path = os.path.join(base_dir, "wikidata_ontology.pkl")
+            if os.path.isfile(ontology_path):
+                cache["ontology"] = pickle.load(open(ontology_path, "rb"))
+            print(
+                "[knowledge_notes] loaded wikidata_kat: topentity_images=%s ontology=%s"
+                % (len(cache["topentities"]), len(cache["ontology"]))
+            )
+        except Exception as e:
+            print(f"[knowledge_notes] failed to load wikidata_kat: {e}")
+        self.wikidata_kat_cache = cache
+        return cache
+
+    def _wikidata_kat_candidates_for_sample(self, data_row, question, obj_list):
+        if "wikidata_kat" not in self._selected_knowledge_sources():
+            return []
+        cache = self._load_wikidata_kat_cache()
+        image_path = str((data_row or {}).get("image_path", ""))
+        image_name = os.path.basename(image_path)
+        entities_payload = cache.get("topentities", {}).get(image_name)
+        if not entities_payload:
+            return []
+        if isinstance(entities_payload, tuple):
+            entities = entities_payload[0]
+        else:
+            entities = entities_payload
+        query_terms = self._knowledge_tokenize(question)
+        for obj in obj_list:
+            query_terms.update(self._knowledge_tokenize(obj))
+
+        scored = []
+        for item in entities:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                title, desc = item[0], item[1]
+            else:
+                title, desc = str(item), ""
+            text = "%s: %s" % (title, desc)
+            terms = self._knowledge_tokenize(text)
+            score = len(query_terms & terms)
+            scored.append((score, str(title), text))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        candidates = []
+        for score, title, text in scored[: max(1, self.args.knowledge_per_source_top_k)]:
+            candidates.append({"source": "wikidata_kat", "title": title, "text": text, "score": score + 100})
+        return candidates
+
+    def retrieve_knowledge_notes_candidates(self, question, obj_list, data_row=None):
         candidates = []
         seen = set()
+        key = (data_row or {}).get("key", "")
+        cached_record = self._sample_knowledge_cache_record(key, data_row=data_row)
+        for item in self._knowledge_items_from_cache_record(cached_record):
+            text = item.get("text", "")
+            if text and text not in seen:
+                seen.add(text)
+                candidates.append(item)
+        if candidates and getattr(self.args, "knowledge_cache_only", False):
+            return candidates[: self.args.knowledge_top_k]
+
         query_terms = self._knowledge_tokenize(question)
         object_terms = []
         for obj in obj_list:
@@ -3964,8 +4548,14 @@ class onion:
                     seen.add(text)
                     candidates.append({"source": "wit", "title": obj_key, "text": text, "score": 999})
 
+        for item in self._wikidata_kat_candidates_for_sample(data_row, question, obj_list):
+            text = item.get("text", "")
+            if text and text not in seen:
+                seen.add(text)
+                candidates.append(item)
+
         corpus = self._load_external_knowledge_corpus()
-        scored = []
+        scored_by_source = defaultdict(list)
         if corpus and self.args.knowledge_retrieval_mode in ("lexical", "hybrid"):
             for idx, record in enumerate(corpus):
                 record_text = self._knowledge_record_text(record)
@@ -3975,14 +4565,23 @@ class onion:
                 score = overlap + object_overlap * 2
                 if score <= 0:
                     continue
-                scored.append((score, idx, record_text))
+                source = corpus[idx].get("source", "corpus") if isinstance(corpus[idx], dict) else "corpus"
+                heapq.heappush(scored_by_source[source], (score, idx, record_text))
+                if len(scored_by_source[source]) > max(1, self.args.knowledge_per_source_top_k):
+                    heapq.heappop(scored_by_source[source])
+            scored = []
+            for source_items in scored_by_source.values():
+                scored.extend(source_items)
             scored.sort(key=lambda x: x[0], reverse=True)
-            for score, idx, text in scored[: self.args.knowledge_top_k]:
+            for score, idx, text in scored:
                 if text and text not in seen:
                     seen.add(text)
-                    title = corpus[idx].get("title", str(idx)) if isinstance(corpus[idx], dict) else str(idx)
-                    candidates.append({"source": "corpus", "title": title, "text": text, "score": score})
+                    record = corpus[idx]
+                    title = record.get("title", str(idx)) if isinstance(record, dict) else str(idx)
+                    source = record.get("source", "corpus") if isinstance(record, dict) else "corpus"
+                    candidates.append({"source": source, "title": title, "text": text, "score": score})
 
+        candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
         return candidates[: self.args.knowledge_top_k]
 
     def _format_retrieved_knowledge(self, retrieved_items, max_chars):
@@ -4351,6 +4950,28 @@ def parser_args():
                         help='when --use_knowledge_enhance should run: onion-routed only, every sample, or knowledge/category question types')
     parser.add_argument('--knowledge_corpus_file', type=str, default='',
                         help='optional JSON/JSONL/TXT external knowledge corpus for Knowledge Notes retrieval')
+    parser.add_argument('--knowledge_cache_file', type=str, default='',
+                        help='optional per-question JSON/JSONL cache from offline retrieval or Knowledge Notes generation')
+    parser.add_argument('--knowledge_cache_only', action='store_true',
+                        help='use only --knowledge_cache_file for retrieval candidates, without online corpus scan')
+    parser.add_argument('--knowledge_sources', type=str, default='',
+                        help='comma-separated local knowledge sources: gs112k,wikidata_kat,wiki21m,conceptnet,custom,okvqa,all')
+    parser.add_argument('--knowledge_dataset_root', type=str, default='/data2/lizhengxue/datasets',
+                        help='root directory for local knowledge sources')
+    parser.add_argument('--knowledge_gs112k_file', type=str, default='',
+                        help='override GS112K OK-VQA corpus csv path')
+    parser.add_argument('--knowledge_wiki21m_file', type=str, default='',
+                        help='override Wiki21M passages tsv path')
+    parser.add_argument('--knowledge_conceptnet_file', type=str, default='',
+                        help='override ConceptNet assertions csv path')
+    parser.add_argument('--knowledge_wikidata_kat_dir', type=str, default='',
+                        help='override Wikidata-KAT root directory')
+    parser.add_argument('--knowledge_source_max_records', type=int, default=50000,
+                        help='max records loaded per large text knowledge source')
+    parser.add_argument('--knowledge_source_scan_limit', type=int, default=500000,
+                        help='max lines scanned per large text knowledge source when filtering')
+    parser.add_argument('--knowledge_per_source_top_k', type=int, default=3,
+                        help='max lexical retrieval candidates kept from each knowledge source before global reranking')
     parser.add_argument('--knowledge_retrieval_mode', type=str, default='hybrid',
                         choices=['lexical', 'hybrid'],
                         help='retrieval strategy for external knowledge corpus')
@@ -4439,8 +5060,17 @@ def parser_args():
                                  'reflective_answer_first', 'adaptive_reflective_answer_first',
                                  'candidate_judge', 'protected_reflective', 'rag_strategy_router',
                                  'multi_strategy_router', 'complex_decompose',
-                                 'direct_rephrase_consistency'],
+                                 'direct_rephrase_consistency', 'notemr_conservative_candidate'],
                         help='prompt style used when --chain_of_thoughts is enabled')
+    parser.add_argument('--notemr_candidate_trigger', type=str, default='knowledge_qtype_or_weak',
+                        choices=['always', 'never', 'knowledge_qtype', 'weak_direct', 'knowledge_qtype_or_weak'],
+                        help='when --cot_style notemr_conservative_candidate should generate knowledge candidate')
+    parser.add_argument('--notemr_relevance_max_tokens', type=int, default=64,
+                        help='max tokens for NoteMR knowledge relevance check')
+    parser.add_argument('--notemr_candidate_max_tokens', type=int, default=24,
+                        help='max tokens for NoteMR knowledge candidate answer')
+    parser.add_argument('--notemr_judge_max_tokens', type=int, default=96,
+                        help='max tokens for NoteMR conservative final judge')
     parser.add_argument('--rephrase_num_questions', type=int, default=3,
                         help='number of semantically equivalent questions generated by direct_rephrase_consistency')
     parser.add_argument('--rephrase_generation_mode', type=str, default='mixed',
@@ -4572,7 +5202,7 @@ def parser_args():
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
     # 数据集选择-验证测试
-    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa, pope, mme')
+    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa, vqav2, pope, mme, hallusionbench')
     parser.add_argument('--split_name', type=str, default='val', help='train, val, test')
     # 描述文本选择
     parser.add_argument('--caption_type', type=str, default='vinvl_tag', help='vinvl_tag, vinvl, vinvl_sg, vinvl_ocr')
@@ -4608,11 +5238,15 @@ def load_official_da_eval_keys(args):
     if args.dataset_name == "mme":
         answer_by_key, official_keys = load_mme_answer_annotations(args)
         return official_keys
+    if args.dataset_name == "hallusionbench":
+        answer_by_key, official_keys = load_hallusionbench_answer_annotations(args)
+        return official_keys
     if args.dataset_name == "pope":
         answer_by_key, official_keys = load_direct_answer_annotations(args)
         return official_keys
-    if args.dataset_name == "okvqa":
-        question_file = os.path.join(args.coco_path, f"OpenEnded_mscoco_{args.split_name}2014_questions.json")
+    if args.dataset_name in ("okvqa", "vqav2"):
+        prefix = "v2_" if args.dataset_name == "vqav2" else ""
+        question_file = os.path.join(args.coco_path, f"{prefix}OpenEnded_mscoco_{args.split_name}2014_questions.json")
         try:
             questions = json.load(open(question_file, "r"))["questions"]
         except FileNotFoundError:
@@ -4638,6 +5272,9 @@ def load_direct_answer_annotations(args):
     if args.dataset_name == "mme":
         return load_mme_answer_annotations(args)
 
+    if args.dataset_name == "hallusionbench":
+        return load_hallusionbench_answer_annotations(args)
+
     if args.dataset_name == "pope":
         subsets = ["random", "popular", "adversarial"] if args.split_name == "all" else [args.split_name]
         answer_by_key = {}
@@ -4659,8 +5296,9 @@ def load_direct_answer_annotations(args):
                     official_keys.add(key)
         return answer_by_key, official_keys
 
-    if args.dataset_name == "okvqa":
-        answer_file = os.path.join(args.coco_path, f"mscoco_{args.split_name}2014_annotations.json")
+    if args.dataset_name in ("okvqa", "vqav2"):
+        prefix = "v2_" if args.dataset_name == "vqav2" else ""
+        answer_file = os.path.join(args.coco_path, f"{prefix}mscoco_{args.split_name}2014_annotations.json")
         try:
             annotations = json.load(open(answer_file, "r"))["annotations"]
         except FileNotFoundError:
@@ -4713,7 +5351,7 @@ def direct_answer_eval_report(args, answers):
         gold = answer_by_key.get(key)
         if gold is None:
             continue
-        if args.dataset_name in ("pope", "mme"):
+        if args.dataset_name in ("pope", "mme", "hallusionbench"):
             official_score = yes_no_answer_score(pred, gold)
             legacy_score = official_score
         else:
@@ -4740,15 +5378,19 @@ def direct_answer_eval_report(args, answers):
         primary_label = "POPE准确率"
     elif args.dataset_name == "mme":
         primary_label = "MME准确率"
+    elif args.dataset_name == "hallusionbench":
+        primary_label = "HallusionBench准确率"
     else:
-        primary_label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
+        primary_label = "VQAv2准确率" if args.dataset_name == "vqav2" else ("OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率")
     if args.eval_all_direct_answers:
         if args.dataset_name == "pope":
             primary_label = "全量POPE诊断"
         elif args.dataset_name == "mme":
             primary_label = "全量MME诊断"
+        elif args.dataset_name == "hallusionbench":
+            primary_label = "全量HallusionBench诊断"
         else:
-            primary_label = "全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断"
+            primary_label = "全量VQAv2诊断" if args.dataset_name == "vqav2" else ("全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断")
         primary_pct, primary_sum, primary_total = official_full_pct, official_full_sum, official_full_total
     else:
         primary_pct, primary_sum, primary_total = official_pct, official_sum, official_total
@@ -4771,9 +5413,9 @@ def direct_answer_eval_report(args, answers):
         "legacy_full_sum": legacy_full_sum,
         "legacy_full_total": legacy_full_total,
         "lines": [
-            f"{'POPE准确率' if args.dataset_name == 'pope' else ('MME准确率' if args.dataset_name == 'mme' else ('OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率'))}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
-            f"旧指标@{'POPE' if args.dataset_name == 'pope' else ('MME' if args.dataset_name == 'mme' else ('OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集'))}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
-            f"{'全量POPE诊断' if args.dataset_name == 'pope' else ('全量MME诊断' if args.dataset_name == 'mme' else ('全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断'))}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
+            f"{'POPE准确率' if args.dataset_name == 'pope' else ('MME准确率' if args.dataset_name == 'mme' else ('HallusionBench准确率' if args.dataset_name == 'hallusionbench' else ('VQAv2准确率' if args.dataset_name == 'vqav2' else ('OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率'))))}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
+            f"旧指标@{'POPE' if args.dataset_name == 'pope' else ('MME' if args.dataset_name == 'mme' else ('HallusionBench' if args.dataset_name == 'hallusionbench' else ('VQAv2' if args.dataset_name == 'vqav2' else ('OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集'))))}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
+            f"{'全量POPE诊断' if args.dataset_name == 'pope' else ('全量MME诊断' if args.dataset_name == 'mme' else ('全量HallusionBench诊断' if args.dataset_name == 'hallusionbench' else ('全量VQAv2诊断' if args.dataset_name == 'vqav2' else ('全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断'))))}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
             f"旧指标@全量诊断: {legacy_full_pct:.2f}% ({legacy_full_sum:.2f}/{legacy_full_total})",
         ],
     }
@@ -4790,8 +5432,10 @@ def official_da_eval_answers(args, answers):
             label = "POPE准确率"
         elif args.dataset_name == "mme":
             label = "MME准确率"
+        elif args.dataset_name == "hallusionbench":
+            label = "HallusionBench准确率"
         else:
-            label = "OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率"
+            label = "VQAv2准确率" if args.dataset_name == "vqav2" else ("OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率")
     if not eval_answers:
         return 0.0, 0.0, 0, label
     acc = sum(float(a[3]) for a in eval_answers)
@@ -4896,10 +5540,14 @@ def main():
     # 数据集准备
     if args.dataset_name == "okvqa":
         aokvqa_data = okvqa_dataset(args)
+    elif args.dataset_name == "vqav2":
+        aokvqa_data = vqav2_dataset(args)
     elif args.dataset_name == "pope":
         aokvqa_data = pope_dataset(args)
     elif args.dataset_name == "mme":
         aokvqa_data = mme_dataset(args)
+    elif args.dataset_name == "hallusionbench":
+        aokvqa_data = hallusionbench_dataset(args)
     else:
         aokvqa_data = aokvqa_dataset(args)
 
