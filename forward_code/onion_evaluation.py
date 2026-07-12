@@ -391,4 +391,3 @@ def merge_results(args):
     json.dump(format_prediction, open(os.path.join(format_answer_dir, output_name), 'w'))
     print(f"[merge] format_answer 已保存: {format_answer_dir}/{output_name}")
     write_official_prediction_file(args, answers, format_answer_dir, output_name)
-

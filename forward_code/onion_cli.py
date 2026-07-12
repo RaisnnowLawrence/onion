@@ -370,7 +370,6 @@ def parser_args():
 
     return args
 
-
 def normalize_dataset_name(name):
     name = str(name or "").strip().lower().replace("-", "_")
     aliases = {
@@ -435,4 +434,3 @@ def resolve_dataset_paths(args):
     if args.dataset_name == "infoseek" and not os.path.isdir(args.coco_path):
         print(f"[dataset] InfoSeek path not found: {args.coco_path}; pass --coco_path when available.")
     return args
-
