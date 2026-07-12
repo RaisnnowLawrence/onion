@@ -14,7 +14,7 @@ from aokvqa_utils import (
     load_textvqa_answer_annotations,
 )
 from official_vqa_answer_processor import normalize_vqa_answer
-from onion_cli import normalize_dataset_name
+from dataset_utils import normalize_dataset_name
 
 
 def process_answer(answer):

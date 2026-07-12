@@ -31,19 +31,6 @@ from transformers import AutoTokenizer, CLIPModel, CLIPProcessor, CLIPTextModel
 
 from lang_sam import LangSAM
 
-from aokvqa_utils import (
-    aokvqa_dataset,
-    gqa_dataset,
-    hallusionbench_dataset,
-    infoseek_dataset,
-    mme_dataset,
-    mme_realworld_dataset,
-    mmstar_dataset,
-    okvqa_dataset,
-    pope_dataset,
-    textvqa_dataset,
-    vqav2_dataset,
-)
 from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible
 from mcts import MCTSQuestionSample
 from official_vqa_answer_processor import normalize_vqa_answer
@@ -59,6 +46,14 @@ from onion_evaluation import (
     yes_no_answer_score,
 )
 from onion_cli import parser_args
+from dataset_utils import (
+    build_dataset,
+    can_skip_scene_graph,
+    image_key_from_sample_key,
+    is_dataset,
+    uses_yes_no_prompt,
+    uses_yes_no_scoring,
+)
 
 
 class Onion:
@@ -116,10 +111,7 @@ class Onion:
         self.temp_question = "What is the person doing?"
 
     def _image_key_from_sample_key(self, key):
-        if self.args.dataset_name == "fvqa":
-            return self.image_dict[key]
-        image_key = str(key).split("<->")[0]
-        return int(image_key) if image_key.isdigit() else image_key
+        return image_key_from_sample_key(key, self.args, getattr(self, "image_dict", None))
 
     def _truncate_text(self, text, max_chars=500):
         """Keep accumulated evidence compact enough for repeated prompt injection."""
@@ -180,7 +172,7 @@ class Onion:
         return answer
 
     def _format_direct_answer_instruction(self, question, prompt_before_answer):
-        if getattr(self.args, "dataset_name", "") in ("pope", "mme", "hallusionbench"):
+        if uses_yes_no_prompt(self.args):
             return (
                 "=== Answer with only yes or no.\n"
                 "%s" % prompt_before_answer
@@ -2172,7 +2164,7 @@ class Onion:
         scene_graph_path = os.path.join(self.dataset.sg_attr_dir, str(image_key).zfill(12) + ".json")
 
         # 这个位置获取scene_graph_attr,加载场景图信息
-        if getattr(self.args, "dataset_name", "") == "mme":
+        if can_skip_scene_graph(self.args):
             scene_graph_attr = [[]]
         elif os.path.isfile(scene_graph_path):
             scene_graph_attr = json.load(open(scene_graph_path))
@@ -2675,7 +2667,9 @@ class Onion:
                             self.dataset.traincontext_answer_dict[context_key][0]) != 0):
                         break
                     context_key = self.train_keys[random.randint(0, len(self.train_keys) - 1)]
-                image_context_key = int(context_key.split('<->')[0]) if self.args.dataset_name!="fvqa" else self.image_dict[context_key] # for fvqa
+                image_context_key = image_key_from_sample_key(
+                    context_key, self.args, getattr(self, "image_dict", None)
+                )
 
                 # 获取问题、答案、caption
                 if self.args.random_caption:
@@ -3474,7 +3468,7 @@ class Onion:
                 pred_answer = self.choices_dict[key][sim.argmax().item()]
             final_score = 1 if pred_answer == self.choices_dict[key][answer] else 0
         else:
-            if self.args.dataset_name in ("pope", "mme"):
+            if uses_yes_no_scoring(self.args):
                 final_score = yes_no_answer_score(pred_answer, answer)
             elif self.args.legacy_answer_normalization:
                 final_score = legacy_normalized_direct_answer_score(pred_answer, answer)
@@ -3642,7 +3636,7 @@ class Onion:
         return any(pattern in q for pattern in visual_patterns)
 
     def _dyfo_should_trigger(self, question, question_type):
-        if getattr(self.args, "dataset_name", "") == "mme":
+        if is_dataset(self.args, "mme"):
             return True
         mode = getattr(self.args, "dyfo_trigger_mode", "visual_detail")
         if mode == "always":
@@ -4218,7 +4212,7 @@ class Onion:
             )
             os.makedirs(self.args.cache_path, exist_ok=True)
             crop.save(temp_path)
-            if getattr(self.args, "dataset_name", "") in ("pope", "mme"):
+            if uses_yes_no_scoring(self.args):
                 prompt = (
                     "Answer the visual question using this focused image region.\n"
                     "Use the visual focus as a hint, but answer the original question.\n"
@@ -5398,7 +5392,7 @@ class Onion:
     # Context selection and model backends
     # ------------------------------------------------------------------
     def pick_example(self, key):
-        image_key = int(key.split('<->')[0]) if self.args.dataset_name != "fvqa" else self.image_dict[key]  # for fvqa
+        image_key = image_key_from_sample_key(key, self.args, getattr(self, "image_dict", None))
         scene_graph_path = os.path.join(self.dataset.sg_attr_dir, str(image_key).zfill(12) + ".json")
         scene_graph_attr = json.load(open(scene_graph_path))
         for attr_id, attr in enumerate(scene_graph_attr[0]):
@@ -5409,7 +5403,7 @@ class Onion:
         return False
     
     def load_caption_qwen(self):
-        if getattr(self.args, "dataset_name", "") == "mme":
+        if is_dataset(self.args, "mme"):
             return {}
         file_path = '/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/caption_onion/aokvqa_val_caption_8b_256.json'
         if not os.path.isfile(file_path):
@@ -5630,27 +5624,6 @@ class Onion:
 
 # Backward compatibility for scripts that import the historical lowercase name.
 onion = Onion
-
-
-DATASET_FACTORIES = {
-    "aokvqa": aokvqa_dataset,
-    "okvqa": okvqa_dataset,
-    "vqav2": vqav2_dataset,
-    "gqa": gqa_dataset,
-    "textvqa": textvqa_dataset,
-    "infoseek": infoseek_dataset,
-    "pope": pope_dataset,
-    "mme": mme_dataset,
-    "mme_realworld": mme_realworld_dataset,
-    "hallusionbench": hallusionbench_dataset,
-    "mmstar": mmstar_dataset,
-}
-
-
-def build_dataset(args):
-    """Construct the configured dataset without a long conditional chain."""
-    factory = DATASET_FACTORIES.get(args.dataset_name, aokvqa_dataset)
-    return factory(args)
 
 
 def save_final_results(args, answers, full_answers, accuracy):
