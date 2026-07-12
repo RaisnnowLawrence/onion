@@ -46,7 +46,7 @@ from onion_evaluation import (
     yes_no_answer_score,
 )
 from onion_cli import parser_args
-from dataset_utils import (
+from aokvqa_utils import (
     build_dataset,
     can_skip_scene_graph,
     image_key_from_sample_key,

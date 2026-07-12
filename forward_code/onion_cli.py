@@ -2,7 +2,7 @@
 
 import argparse
 
-from dataset_utils import resolve_dataset_paths
+from aokvqa_utils import resolve_dataset_paths
 
 
 def parser_args():

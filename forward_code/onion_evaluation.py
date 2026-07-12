@@ -12,9 +12,9 @@ from aokvqa_utils import (
     load_hallusionbench_answer_annotations,
     load_mme_answer_annotations,
     load_textvqa_answer_annotations,
+    normalize_dataset_name,
 )
 from official_vqa_answer_processor import normalize_vqa_answer
-from dataset_utils import normalize_dataset_name
 
 
 def process_answer(answer):
