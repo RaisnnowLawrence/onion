@@ -1,43 +1,54 @@
-import os
-import csv
+"""VisualCoT/Onion inference entry point.
+
+The file is intentionally kept executable for compatibility with existing
+experiment scripts.  Its contents are grouped by responsibility: scoring,
+inference orchestration, enhancement strategies, CLI configuration, and
+evaluation/output handling.
+"""
+
 import argparse
-import numpy as np
-import multiprocessing
-import json
-import time
-import torch
-import random
-import openai
-import re
-import math
-from tqdm import tqdm
-from transformers import GPT2Tokenizer
-import pdb
-import pickle
+import base64
+import csv
+import datetime
 import glob
 import gzip
 import heapq
-from transformers import CLIPProcessor, CLIPModel
-from transformers import CLIPTokenizer, CLIPTextModel
-from PIL import Image
-import datetime
-import base64
+import json
+import math
+import os
+import pdb
+import pickle
+import random
+import re
+import time
 from collections import Counter, defaultdict
-from modelscope import Qwen3VLForConditionalGeneration, AutoProcessor
-from transformers import AutoTokenizer
-from lang_sam import LangSAM
 
-from sam_utils import process_langsam_results_to_visualization, combine_masks_max_simple, clean_string_basic
+import numpy as np
+import torch
+from PIL import Image
+from modelscope import Qwen3VLForConditionalGeneration, AutoProcessor
+from tqdm import tqdm
+from transformers import AutoTokenizer, CLIPModel, CLIPProcessor, CLIPTextModel
+
+from lang_sam import LangSAM
 
 from aokvqa_utils import (
     aokvqa_dataset,
+    gqa_dataset,
+    infoseek_dataset,
     okvqa_dataset,
+    textvqa_dataset,
     vqav2_dataset,
     pope_dataset,
     mme_dataset,
+    mme_realworld_dataset,
     hallusionbench_dataset,
+    mmstar_dataset,
+    load_generic_vqa_answer_annotations,
+    load_gqa_answer_annotations,
     load_mme_answer_annotations,
     load_hallusionbench_answer_annotations,
+    load_textvqa_answer_annotations,
 )
 from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible
 from mcts import MCTSQuestionSample
@@ -57,6 +68,19 @@ def official_direct_answer_score(pred_answer, direct_answers):
     normalized_pred = normalize_vqa_answer(pred_answer)
     num_match = sum(normalized_pred == normalize_vqa_answer(answer) for answer in direct_answers)
     return min(1.0, num_match / 3.0)
+
+
+def open_ended_answer_score(pred_answer, direct_answers):
+    """Score single-answer QA by exact match and VQA-style multi-answer sets by consensus."""
+    normalized_pred = normalize_vqa_answer(pred_answer)
+    choice_pred = re.match(r"^\s*([a-z])(?:\s*[:.)\-]|\s*$)", str(pred_answer).strip().lower())
+    if len(direct_answers) < 3:
+        normalized_gold = [normalize_vqa_answer(answer) for answer in direct_answers]
+        if all(re.fullmatch(r"[a-z]", answer) for answer in normalized_gold):
+            pred_choice = choice_pred.group(1) if choice_pred else normalized_pred[:1]
+            return 1.0 if pred_choice in normalized_gold else 0.0
+        return 1.0 if normalized_pred in normalized_gold else 0.0
+    return official_direct_answer_score(pred_answer, direct_answers)
 
 
 def legacy_normalized_direct_answer_score(pred_answer, direct_answers):
@@ -88,7 +112,9 @@ def yes_no_answer_score(pred_answer, direct_answers):
     return 1.0 if pred == gold else 0.0
 
 
-class onion:    
+class Onion:
+    """Run Onion inference and optional visual/knowledge enhancements."""
+
     def __init__(self, args, dataset):
 
         self.dataset = dataset
@@ -109,17 +135,16 @@ class onion:
         self.last_dyfo_focus_image_path = None
         self.train_keys = getattr(dataset, "train_keys", [])
         
-        # 引擎初始化
+        # Core model and optional enhancement models are loaded lazily where
+        # possible to keep multi-shard startup memory under control.
         self.initialize_qwen(self.args.engine)
 
         # 图像处理部分按需初始化。Direct/非视觉增强实验不需要加载
         # GroundingDINO + SAM，否则多 shard 同时启动时容易产生很高的显存峰值。
         self.sam = None
 
-        # 加载caption部分
         self.caption_qwen = self.load_caption_qwen()
 
-        # 加载 WIT 外部知识。只有知识增强路线需要这份较大的本地知识表。
         self.wit_knowkedge = self.load_wit_knowkedge() if args.use_knowledge_enhance else {}
 
         if getattr(args, "strategy_profile_path", ""):
@@ -140,6 +165,12 @@ class onion:
             self.clip_full_processor = CLIPProcessor.from_pretrained("/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-model/clip-vit-base-patch16")
 
         self.temp_question = "What is the person doing?"
+
+    def _image_key_from_sample_key(self, key):
+        if self.args.dataset_name == "fvqa":
+            return self.image_dict[key]
+        image_key = str(key).split("<->")[0]
+        return int(image_key) if image_key.isdigit() else image_key
 
     def _truncate_text(self, text, max_chars=500):
         """Keep accumulated evidence compact enough for repeated prompt injection."""
@@ -794,6 +825,24 @@ class onion:
                 if "scores" in rec:
                     profile[key] = rec
                     continue
+                if "pure_score" in rec and "dyfo_score" in rec:
+                    profile[key] = {
+                        "key": key,
+                        "image_id": rec.get("image_id"),
+                        "question": rec.get("question", ""),
+                        "question_type": rec.get("question_type", ""),
+                        "scores": {
+                            "pure": float(rec.get("pure_score", 0.0)),
+                            "dyfo": float(rec.get("dyfo_score", 0.0)),
+                        },
+                        "answers": {
+                            "pure": rec.get("pure_answer", ""),
+                            "dyfo": rec.get("dyfo_answer", ""),
+                        },
+                        "router_label": rec.get("router_label", ""),
+                        "recommended_route": rec.get("recommended_route", ""),
+                    }
+                    continue
 
                 strategy = rec.get("strategy")
                 if not strategy:
@@ -811,6 +860,40 @@ class onion:
 
         print(f"[strategy_router] loaded {len(profile)} strategy-profile samples from {profile_path}")
         return profile
+
+    def _strategy_profile_question_tokens(self, text):
+        stop = {
+            "a", "an", "the", "is", "are", "was", "were", "do", "does", "did",
+            "there", "any", "of", "to", "in", "on", "at", "for", "with", "and",
+            "or", "that", "this", "these", "those", "what", "which", "who", "where",
+            "how", "many", "much", "kind", "type", "color", "colour", "image", "photo",
+            "picture", "left", "right", "top", "bottom", "front", "behind", "near",
+        }
+        return {tok for tok in re.findall(r"[a-z0-9]+", str(text).lower()) if tok not in stop and len(tok) > 1}
+
+    def _strategy_profile_fallback_neighbors(self, question, question_type, limit):
+        query_tokens = self._strategy_profile_question_tokens(question)
+        if not query_tokens:
+            return []
+        scored = []
+        for ctx_key, rec in self.strategy_profile.items():
+            rec_question = rec.get("question", "")
+            rec_tokens = rec.get("_question_tokens")
+            if rec_tokens is None:
+                rec_tokens = self._strategy_profile_question_tokens(rec_question)
+                rec["_question_tokens"] = rec_tokens
+            if not rec_tokens:
+                continue
+            overlap = len(query_tokens & rec_tokens)
+            if overlap == 0:
+                continue
+            union = len(query_tokens | rec_tokens) or 1
+            score = overlap / union
+            if rec.get("question_type", "") == question_type:
+                score += 0.05
+            scored.append((score, ctx_key))
+        scored.sort(reverse=True)
+        return [ctx_key for _, ctx_key in scored[:limit]]
 
     def _route_with_strategy_profile(self, key, question):
         if not self.strategy_profile:
@@ -830,6 +913,14 @@ class onion:
         context_keys = self.get_context_keys(key, self.args.strategy_retrieval_metric, topk * context_multiplier)
         if not context_keys:
             context_keys = []
+        profile_context_keys = [ctx_key for ctx_key in context_keys if ctx_key in self.strategy_profile]
+        if len(profile_context_keys) < self.args.strategy_min_neighbors:
+            fallback_keys = self._strategy_profile_fallback_neighbors(
+                question, question_type, topk * context_multiplier
+            )
+            seen = set(profile_context_keys)
+            profile_context_keys.extend([ctx_key for ctx_key in fallback_keys if ctx_key not in seen])
+            context_keys = profile_context_keys
 
         direct_name = self.args.strategy_direct_name
         cot_name = self.args.strategy_cot_name
@@ -934,6 +1025,8 @@ class onion:
 
     def _route_with_multi_strategy_profile(self, key, question):
         default_strategy = self.args.multi_strategy_default
+        if getattr(self.args, "multi_strategy_router_source", "profile") == "mllm":
+            return self._route_with_multi_strategy_mllm(question)
         if not self.strategy_profile:
             return {
                 "strategy": default_strategy,
@@ -1018,6 +1111,48 @@ class onion:
             "strategy_avgs": avgs,
             "best_avg": best_avg,
             "default_avg": default_avg,
+        }
+
+    def _route_with_multi_strategy_mllm(self, question):
+        strategies = [s.strip() for s in self.args.multi_strategy_names.split(",") if s.strip()]
+        default_strategy = self.args.multi_strategy_default
+        if default_strategy not in strategies:
+            strategies.insert(0, default_strategy)
+        prompt = (
+            "You are routing a visual question answering sample.\n"
+            "Choose exactly one strategy from: %s.\n"
+            "direct means answer with the original multimodal model.\n"
+            "dyfo means first search for focused visual evidence when small objects, attributes, text, counting, or spatial relations matter.\n"
+            "Prefer direct when the question is global, commonsense-heavy, or the visual focus is unlikely to help.\n"
+            "Output exactly: Strategy: <name>\n"
+            "Question: %s"
+        ) % (", ".join(strategies), question)
+        try:
+            response = self._call_llm(
+                prompt,
+                image_path=None,
+                max_new_tokens=getattr(self.args, "dyfo_focus_max_tokens", 32),
+                use_images=False,
+            )
+        except Exception as exc:
+            response = "router failed: %s" % exc
+        text = str(response).strip().lower()
+        selected = default_strategy
+        for strategy in strategies:
+            if re.search(r"\b%s\b" % re.escape(strategy.lower()), text):
+                selected = strategy
+                break
+        if selected not in strategies:
+            selected = default_strategy
+        return {
+            "strategy": selected,
+            "reason": "mllm_router",
+            "router_prompt": prompt,
+            "router_response": response,
+            "neighbors": [],
+            "strategy_avgs": {},
+            "best_avg": 0.0,
+            "default_avg": 0.0,
         }
 
     def _format_protected_review_prompt(self, cur_caption, question, choice_text, initial_answer):
@@ -2036,7 +2171,7 @@ class onion:
             answers.append(final_answer)
             full_answers.append(answer_list)
             if self.args.strategy_profile_output:
-                image_key = int(key.split('<->')[0]) if self.args.dataset_name!="fvqa" else self.image_dict[key]
+                image_key = self._image_key_from_sample_key(key)
                 profile_record = {
                     "key": key,
                     "image_id": image_key,
@@ -2078,7 +2213,7 @@ class onion:
     def sample_inference_interactive(self, key):
 
         # 获取图片id（支持fvqa特殊处理）
-        image_key = int(key.split('<->')[0]) if self.args.dataset_name!="fvqa" else self.image_dict[key] # for fvqa
+        image_key = self._image_key_from_sample_key(key)
         # 加载原始图片
         raw_image = self.dataset.find_image(image_key)
 
@@ -2254,7 +2389,7 @@ class onion:
                 break
         return final_answer, answer_list
 
-    def init_attention_object(self, key, attr_list, image_path, ban_option=[]):
+    def init_attention_object(self, key, attr_list, image_path, ban_option=None):
         '''
         直接提出问题,询问
         "对于给定的问题和图像,下面哪些选项是你应该关注的?"
@@ -2292,9 +2427,6 @@ class onion:
         else:
             response = self._call_llm(prompt)
 
-        response_list = string_to_list_if_possible(response)
-
-        # deepseek代码
         # 获取response_list（字母列表）
         response_list = string_to_list_if_possible(response)  # 例如 ['A', 'C']
 
@@ -2379,7 +2511,10 @@ class onion:
     # 针对单样本的核心推理代码
     # key, 场景图属性, 思考历史
     def sample_inference(self, key, attr_list, scene_graph_attr, thoughts_list=None,
-                         onion_instruction=[None, ], round_idx=None, state_history=None):
+                         onion_instruction=None, round_idx=None, state_history=None):
+
+        if onion_instruction is None:
+            onion_instruction = [None]
 
         # onion_instruction[0] 已经给出的下一步的指令
         # onion_instruction[1] 已经给出的下一步指令的对象
@@ -2387,7 +2522,7 @@ class onion:
         # 补充：这段代码是 Chain-of-Thought (CoT) 推理步骤的后处理与验证模块，主要功能是用 CLIP 模型筛选高质量的推理步骤。
 
         # 获取图片id
-        image_key = int(key.split('<->')[0]) if self.args.dataset_name!="fvqa" else self.image_dict[key] # for fvqa
+        image_key = self._image_key_from_sample_key(key)
         # 获取图片路径
         image_path = self.dataset.find_image_path(image_key)
         # 是否随机选择caption
@@ -2464,8 +2599,13 @@ class onion:
         dyfo_evidence_enabled = self.args.use_dyfo_visual_evidence or self.args.mcts_action_mode == "dyfo_evidence"
         question_type = self._classify_vqa_question_type(question)
         multi_strategy_route = None
+        rag_strategy_route = None
+        rag_selected_strategy = None
         if self.args.cot_style == "multi_strategy_router":
             multi_strategy_route = self._route_with_multi_strategy_profile(key, question)
+        if self.args.cot_style == "rag_strategy_router":
+            rag_strategy_route = self._route_with_strategy_profile(key, question)
+            rag_selected_strategy = rag_strategy_route.get("strategy")
         selective_evidence_kinds = {"caption"}
         if self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective":
             selective_evidence_kinds = self._selective_reviewer_evidence_kinds(question)
@@ -2488,7 +2628,14 @@ class onion:
             effective_use_knowledge_enhance = self.args.use_knowledge_enhance and question_type in ("knowledge", "category")
         if self.args.cot_style == "multi_strategy_router":
             selected_strategy = (multi_strategy_route or {}).get("strategy", self.args.multi_strategy_default)
-            effective_use_image_enhance = self.args.use_image_enhance and selected_strategy == "marker_mcts"
+            effective_use_image_enhance = self.args.use_image_enhance and selected_strategy in ("marker_mcts", "dyfo")
+            effective_use_caption_enhance = False
+            effective_use_knowledge_enhance = False
+        if self.args.cot_style == "rag_strategy_router" and self.args.strategy_cot_runtime == "dyfo_evidence":
+            effective_use_image_enhance = (
+                self.args.use_image_enhance
+                and rag_selected_strategy == self.args.strategy_cot_name
+            )
             effective_use_caption_enhance = False
             effective_use_knowledge_enhance = False
         selective_mode = self.args.cot_style == "reviewer_evidence" and self.args.reviewer_evidence_scope == "selective"
@@ -2504,12 +2651,13 @@ class onion:
                 dyfo_result = self._run_dyfo_visual_evidence_search(data_row, onion_instruction[1], attr_list)
                 dyfo_visual_evidence = dyfo_result.get("evidence", "")
                 dyfo_focus_image_path = dyfo_result.get("focus_image_path")
+                dyfo_answer_image_path = dyfo_result.get("answer_image_path")
                 dyfo_final_answer = dyfo_result.get("final_answer", "")
                 dyfo_decision_trace = dyfo_result.get("decision_trace")
                 self.last_dyfo_visual_evidence = dyfo_visual_evidence
                 self.last_dyfo_focus_image_path = dyfo_focus_image_path
-                if self.args.dyfo_use_focus_image_as_answer and dyfo_focus_image_path:
-                    enhance_image_path = dyfo_focus_image_path
+                if self.args.dyfo_use_focus_image_as_answer:
+                    enhance_image_path = dyfo_answer_image_path or dyfo_focus_image_path
                 print('-----enhance_image-----DyFo visual evidence已生成-----')
                 print('dyfo_visual_evidence:', dyfo_visual_evidence)
             else:
@@ -2657,6 +2805,17 @@ class onion:
                 cur_caption += '\nDyFo visual evidence: ' + self._truncate_text(
                     dyfo_visual_evidence, self.args.dyfo_evidence_context_max_chars
                 )
+            if (
+                enhance_image_path
+                and self.args.mcts_action_mode == "dyfo_evidence"
+                and self.args.dyfo_use_focus_image_as_answer
+                and self.args.dyfo_answer_image_mode.startswith("concat")
+            ):
+                cur_caption += (
+                    "\nDyFo image layout: the provided image concatenates the original image with "
+                    "a DyFo focused crop resized to the original size. Use the original view for "
+                    "global context and the focused view for local detail."
+                )
             if self.args.direct_prompt_style == "context_gated":
                 cur_caption = self._build_direct_context_for_style(
                     question, caption, regional_context, ocr_context
@@ -2664,6 +2823,16 @@ class onion:
                 if dyfo_evidence_enabled and dyfo_visual_evidence:
                     cur_caption += '\nDyFo visual evidence: ' + self._truncate_text(
                         dyfo_visual_evidence, self.args.dyfo_evidence_context_max_chars
+                    )
+                if (
+                    enhance_image_path
+                    and self.args.mcts_action_mode == "dyfo_evidence"
+                    and self.args.dyfo_use_focus_image_as_answer
+                    and self.args.dyfo_answer_image_mode.startswith("concat")
+                ):
+                    cur_caption += (
+                        "\nDyFo image layout: the provided image concatenates the original image "
+                        "with a DyFo focused crop resized to the original size."
                     )
             prompt_context = direct_answer_context if self.args.cot_style == "reviewer_evidence" else cur_caption
 
@@ -2720,6 +2889,8 @@ class onion:
                         runtime_image_path = answer_image_path
                         if selected_strategy == "marker_mcts" and enhance_image_path:
                             runtime_image_path = enhance_image_path
+                        if selected_strategy == "dyfo" and enhance_image_path:
+                            runtime_image_path = enhance_image_path
 
                         if selected_strategy == "direct":
                             extracted_answer = initial_answer
@@ -2747,6 +2918,15 @@ class onion:
                             runtime_trace = (
                                 "Marker MCTS Runtime\nEnhanced Image: %s\nPrompt:\n%s\nResponse:\n%s\nFinal Answer: %s"
                             ) % (enhance_image_path, marker_prompt, marker_response, extracted_answer)
+                        elif selected_strategy == "dyfo":
+                            extracted_answer = self._clean_short_answer(dyfo_final_answer or initial_answer)
+                            runtime_trace = (
+                                "DyFo Runtime\nDyFo Evidence:\n%s\nDyFo Decision Trace:\n%s\nFinal Answer: %s"
+                            ) % (
+                                dyfo_visual_evidence,
+                                json.dumps(dyfo_decision_trace, ensure_ascii=False),
+                                extracted_answer,
+                            )
                         else:
                             extracted_answer = initial_answer
                             runtime_trace = "Unknown selected strategy %s; fallback direct.\nFinal Answer: %s" % (
@@ -2789,8 +2969,9 @@ class onion:
                         ) % (initial_answer, review_prompt, review_response, extracted_answer)
                     elif self.args.cot_style == "rag_strategy_router":
                         initial_answer = self._clean_short_answer(self._extract_answer_from_response(response))
-                        route = self._route_with_strategy_profile(key, question)
+                        route = rag_strategy_route or self._route_with_strategy_profile(key, question)
                         selected_strategy = route["strategy"]
+                        rag_selected_strategy = selected_strategy
                         if selected_strategy == self.args.strategy_cot_name:
                             if self.args.strategy_cot_runtime == "complex_decompose":
                                 decomp = self._run_complex_decompose_from_direct(
@@ -2822,6 +3003,23 @@ class onion:
                                     decomp["decompose_response"], decomp["decomposed_answer"],
                                     self.args.decompose_verify, decomp["verify_prompt"],
                                     decomp["verify_response"], extracted_answer,
+                                )
+                            elif self.args.strategy_cot_runtime == "dyfo_evidence":
+                                extracted_answer = self._clean_short_answer(dyfo_final_answer or initial_answer)
+                                response = (
+                                    "RAG Strategy Router: %s\n"
+                                    "Router Mode: %s\n"
+                                    "Route Stats: direct_avg=%.3f cot_avg=%.3f rescue_rate=%.3f damage_rate=%.3f reason=%s\n"
+                                    "Initial Direct Answer: %s\n"
+                                    "DyFo Visual Evidence:\n%s\n"
+                                    "DyFo Decision Trace:\n%s\n"
+                                    "Final Answer: %s"
+                                ) % (
+                                    selected_strategy, self.args.strategy_router_mode,
+                                    route.get("direct_avg", 0.0), route.get("cot_avg", 0.0),
+                                    route.get("rescue_rate", 0.0), route.get("damage_rate", 0.0),
+                                    route.get("reason", ""), initial_answer, dyfo_visual_evidence,
+                                    json.dumps(dyfo_decision_trace, ensure_ascii=False), extracted_answer,
                                 )
                             elif self.args.strategy_cot_runtime == "answer_first_locked":
                                 cot_prompt = self._format_candidate_prompt(
@@ -3287,6 +3485,14 @@ class onion:
             self.args.mcts_action_mode == "dyfo_evidence"
             and self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote")
             and dyfo_final_answer
+            and (
+                self.args.cot_style != "rag_strategy_router"
+                or rag_selected_strategy == self.args.strategy_cot_name
+            )
+            and (
+                self.args.cot_style != "multi_strategy_router"
+                or (multi_strategy_route or {}).get("strategy") == "dyfo"
+            )
         ):
             pred_candidates = [self._postprocess_answer(dyfo_final_answer)]
             print('-----dyfo_decision-----使用DyFo native final answer-----+++++-----beg')
@@ -3355,7 +3561,7 @@ class onion:
     
     def onion_make_instruction(self, key, object_list):
         onion_instruction = []
-        image_key = int(key.split('<->')[0]) if self.args.dataset_name!="fvqa" else self.image_dict[key]
+        image_key = self._image_key_from_sample_key(key)
         image_path = self.dataset.find_image_path(image_key)
         question = self.dataset.question_dict[key]
 
@@ -3520,6 +3726,84 @@ class onion:
             return str(fallback).strip()
         return text
 
+    def _parse_dyfo_key_objects(self, response):
+        text = str(response).strip()
+        if not text:
+            return []
+
+        candidates = []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                for key in ("key_objects", "objects", "targets"):
+                    if isinstance(parsed.get(key), list):
+                        candidates = parsed[key]
+                        break
+            elif isinstance(parsed, list):
+                candidates = parsed
+        except Exception:
+            candidates = []
+
+        if not candidates:
+            match = re.search(r"\[[^\]]+\]", text)
+            if match:
+                try:
+                    parsed = json.loads(match.group(0).replace("'", '"'))
+                    if isinstance(parsed, list):
+                        candidates = parsed
+                except Exception:
+                    candidates = []
+
+        if not candidates:
+            text = re.sub(r"(?is)^.*?(?:key objects?|objects?|targets?)\s*(?:are|:)\s*", "", text)
+            parts = re.split(r"[,;\n]+", text)
+            candidates = [part.strip() for part in parts]
+
+        key_objects = []
+        generic = {
+            "image", "picture", "photo", "scene", "object", "objects", "thing",
+            "things", "area", "region", "evidence", "unknown", "none", "n/a", "na"
+        }
+        for item in candidates:
+            phrase = str(item).strip()
+            phrase = re.sub(r"^\s*(?:[-*]|\d+[\).:])\s*", "", phrase).strip()
+            phrase = phrase.strip(" \t\"'`.,;:!?")
+            phrase = re.sub(r"\s+", " ", phrase)
+            if not phrase:
+                continue
+            if phrase.lower() in generic:
+                continue
+            if len(phrase.split()) > 8:
+                continue
+            if phrase.lower() not in [obj.lower() for obj in key_objects]:
+                key_objects.append(phrase)
+            if len(key_objects) >= 5:
+                break
+        return key_objects
+
+    def extract_key_objects_from_question(self, question):
+        prompt = (
+            "Extract the key visible object phrases needed to answer this visual question.\n"
+            "Use the question text freely; do not restrict yourself to detector labels.\n"
+            "Include relational phrases when helpful, such as 'person with white trousers' or 'person in blue'.\n"
+            "Do not answer the question. Return a JSON list of 1 to 5 short phrases only.\n"
+            "Question: %s"
+        ) % question
+        try:
+            response = self._call_llm(
+                prompt,
+                image_path=None,
+                max_new_tokens=getattr(self.args, "dyfo_focus_max_tokens", 32),
+                use_images=False,
+            )
+        except Exception as exc:
+            print(f"[dyfo] free key-object extraction failed: {exc}")
+            return [], ""
+        key_objects = self._parse_dyfo_key_objects(response)
+        print("[dyfo] free-extracted key_objects:", key_objects)
+        print("[dyfo] key_object_extraction_response:", response)
+        return key_objects, response
+
     def _dyfo_question_focus_fallback(self, question):
         focus = re.sub(r"\bplease answer yes or no\b", "", str(question), flags=re.IGNORECASE)
         focus = re.sub(r"\b(answer|reply) (with )?(only )?(yes|no|yes or no)\b", "", focus, flags=re.IGNORECASE)
@@ -3532,16 +3816,21 @@ class onion:
             focus = " ".join(words[:8])
         return focus or "the visual evidence needed by the question"
 
-    def _dyfo_initial_focus(self, question, obj_list):
-        fallback = obj_list[0] if obj_list else self._dyfo_question_focus_fallback(question)
-        object_hint = ", ".join(obj_list[:8]) if obj_list else "No detector candidates are available; infer the cue from the question."
+    def _dyfo_initial_focus(self, question, obj_list=None, key_objects=None):
+        obj_list = obj_list or []
+        key_objects = key_objects or []
+        fallback_pool = key_objects or obj_list
+        fallback = fallback_pool[0] if fallback_pool else self._dyfo_question_focus_fallback(question)
+        object_hint = ", ".join(key_objects[:8]) if key_objects else "No free key objects were extracted; infer the cue from the question."
+        candidate_hint = ", ".join(obj_list[:8]) if obj_list else "No fallback detector candidates are available."
         prompt = (
             "Choose the most useful visual focus cue for answering the question.\n"
             "The focus should be a visible object, attribute, text area, relation, or small region that a visual expert can localize.\n"
             "Do not answer the question. Output exactly: Focus: <short visual cue>\n"
             "Question: %s\n"
-            "Candidate objects: %s"
-        ) % (question, object_hint)
+            "Key objects: %s\n"
+            "Fallback detector candidates: %s"
+        ) % (question, object_hint, candidate_hint)
         response = self._call_llm(prompt, image_path=None, max_new_tokens=self.args.dyfo_focus_max_tokens, use_images=False)
         return self._parse_dyfo_focus_text(response, fallback), response
 
@@ -3607,6 +3896,299 @@ class onion:
             int(np.max(boxes[:, 3])),
         )
 
+    def _dyfo_locate_with_fallbacks(self, image_pil, focus_text, key_objects=None, selected_objects=None):
+        key_objects = key_objects or []
+        selected_objects = selected_objects or []
+        queries = []
+
+        if focus_text:
+            queries.append(("focus_cue", focus_text))
+        if key_objects:
+            queries.append(("key_objects", ", ".join(key_objects[:5])))
+        if selected_objects:
+            queries.append(("selected_objects", ", ".join(selected_objects[:5])))
+
+        seen = set()
+        for source, query in queries:
+            query = str(query).strip()
+            if not query or query.lower() in seen:
+                continue
+            seen.add(query.lower())
+            box = self._dyfo_locate_focus(image_pil, query)
+            if box is not None:
+                fallback_triggered = source != "focus_cue"
+                print(
+                    "[dyfo] LangSAM query source=%s fallback=%s query=%s box=%s"
+                    % (source, fallback_triggered, query, box)
+                )
+                return box, query, source, fallback_triggered
+            print("[dyfo] LangSAM query failed source=%s query=%s" % (source, query))
+
+        print("[dyfo] LangSAM all queries failed for focus=%s" % focus_text)
+        return None, "", "none", True
+
+    def _dyfo_unique_targets(self, targets):
+        unique = []
+        seen = set()
+        for target in targets or []:
+            text = re.sub(r"\s+", " ", str(target).strip())
+            text = text.strip(" \t\"'`.,;:!?")
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(text)
+            if len(unique) >= 5:
+                break
+        return unique
+
+    def _dyfo_union_boxes(self, boxes, image_size, padding_scale=1.0):
+        valid_boxes = []
+        w, h = image_size
+        for box in boxes or []:
+            if not box:
+                continue
+            x1, y1, x2, y2 = box
+            x1 = max(0, min(w, int(x1)))
+            y1 = max(0, min(h, int(y1)))
+            x2 = max(0, min(w, int(x2)))
+            y2 = max(0, min(h, int(y2)))
+            if x2 > x1 and y2 > y1:
+                valid_boxes.append((x1, y1, x2, y2))
+        if not valid_boxes:
+            return None
+        arr = np.array(valid_boxes)
+        union_box = (
+            int(np.min(arr[:, 0])),
+            int(np.min(arr[:, 1])),
+            int(np.max(arr[:, 2])),
+            int(np.max(arr[:, 3])),
+        )
+        return self._dyfo_expand_box(union_box, image_size, padding_scale)
+
+    def _dyfo_is_relation_question(self, question):
+        q = str(question).lower()
+        relation_terms = [
+            "left", "right", "behind", "in front of", "next to", "beside",
+            "between", "near", "on top of", "under", "below", "above",
+            "around", "across", "closest", "farther", "same", "different",
+            "than", "facing", "holding", "wearing", "with"
+        ]
+        return any(term in q for term in relation_terms)
+
+    def _dyfo_abs_box_from_local(self, local_box, parent_box):
+        if not local_box:
+            return None
+        px1, py1, _, _ = parent_box
+        lx1, ly1, lx2, ly2 = local_box
+        return (px1 + lx1, py1 + ly1, px1 + lx2, py1 + ly2)
+
+    def _dyfo_locate_required_targets(self, image_pil, required_targets, allow_joined_query=True):
+        required_targets = self._dyfo_unique_targets(required_targets)
+        target_boxes = {}
+        missing_targets = []
+        query_log = []
+        support_boxes = []
+
+        for target in required_targets:
+            box = self._dyfo_locate_focus(image_pil, target)
+            query_log.append({
+                "target": target,
+                "query": target,
+                "source": "required_target",
+                "box": box,
+            })
+            if box is None:
+                missing_targets.append(target)
+            else:
+                target_boxes[target] = box
+                support_boxes.append(box)
+
+        joined_box = None
+        if allow_joined_query and missing_targets and len(required_targets) > 1:
+            joined_query = ", ".join(required_targets)
+            joined_box = self._dyfo_locate_focus(image_pil, joined_query)
+            query_log.append({
+                "target": "__joined_required_targets__",
+                "query": joined_query,
+                "source": "joined_required_targets",
+                "box": joined_box,
+            })
+            if joined_box is not None:
+                support_boxes.append(joined_box)
+
+        union_box = self._dyfo_union_boxes(
+            support_boxes, image_pil.size, getattr(self.args, "dyfo_focus_padding", 1.2)
+        )
+        result = {
+            "required_targets": required_targets,
+            "target_boxes": target_boxes,
+            "missing_targets": missing_targets,
+            "all_targets_located": bool(required_targets) and not missing_targets,
+            "support_boxes": support_boxes,
+            "joined_box": joined_box,
+            "union_box": union_box,
+            "query_log": query_log,
+        }
+        print(
+            "[dyfo] required-target locate all_located=%s missing=%s union=%s"
+            % (result["all_targets_located"], missing_targets, union_box)
+        )
+        return result
+
+    def _dyfo_qwen_target_presence(self, crop, target, question):
+        temp_path = None
+        try:
+            temp_path = os.path.join(
+                self.args.cache_path,
+                "dyfo_target_check_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+            )
+            os.makedirs(self.args.cache_path, exist_ok=True)
+            crop.save(temp_path)
+            prompt = (
+                "Is there a %s in this image crop? Answer yes or no.\n"
+                "Question context: %s"
+            ) % (target, question)
+            reply = self._call_llm(prompt, image_path=temp_path, max_new_tokens=8)
+            return str(reply).strip().lower().startswith("yes"), reply
+        except Exception as exc:
+            return False, "target presence check failed: %s" % exc
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def _dyfo_spatial_context_check(self, crop, question):
+        temp_path = None
+        try:
+            temp_path = os.path.join(
+                self.args.cache_path,
+                "dyfo_spatial_check_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+            )
+            os.makedirs(self.args.cache_path, exist_ok=True)
+            crop.save(temp_path)
+            prompt = (
+                "Does this image crop preserve enough spatial context to answer the spatial or relational question? "
+                "Answer yes or no.\n"
+                "Question: %s"
+            ) % question
+            reply = self._call_llm(prompt, image_path=temp_path, max_new_tokens=8)
+            return str(reply).strip().lower().startswith("yes"), reply
+        except Exception as exc:
+            return False, "spatial context check failed: %s" % exc
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def _dyfo_check_all_targets_present(self, crop, required_targets, question):
+        required_targets = self._dyfo_unique_targets(required_targets)
+        if not required_targets:
+            return {
+                "all_targets_present": True,
+                "present_targets": [],
+                "missing_targets": [],
+                "target_boxes": {},
+                "presence_replies": {},
+                "locate_trace": [],
+                "spatial_context_ok": True,
+                "spatial_context_reply": "",
+            }
+
+        locate_result = self._dyfo_locate_required_targets(crop, required_targets, allow_joined_query=False)
+        present_targets = set(locate_result["target_boxes"].keys())
+        missing_targets = list(locate_result["missing_targets"])
+        presence_replies = {}
+
+        # LangSAM can fail on descriptive phrases; use Qwen as a conservative
+        # yes/no retention fallback for targets that were not re-localized.
+        for target in list(missing_targets):
+            present, reply = self._dyfo_qwen_target_presence(crop, target, question)
+            presence_replies[target] = reply
+            if present:
+                present_targets.add(target)
+                missing_targets.remove(target)
+
+        result = {
+            "all_targets_present": len(missing_targets) == 0,
+            "present_targets": list(present_targets),
+            "missing_targets": missing_targets,
+            "target_boxes": locate_result["target_boxes"],
+            "presence_replies": presence_replies,
+            "locate_trace": locate_result["query_log"],
+            "spatial_context_ok": True,
+            "spatial_context_reply": "",
+        }
+        if result["all_targets_present"] and self._dyfo_is_relation_question(question):
+            spatial_ok, spatial_reply = self._dyfo_spatial_context_check(crop, question)
+            result["spatial_context_ok"] = spatial_ok
+            result["spatial_context_reply"] = spatial_reply
+            if not spatial_ok:
+                result["all_targets_present"] = False
+                result["missing_targets"] = ["spatial_context"]
+        print(
+            "[dyfo] all-target retention all_present=%s present=%s missing=%s"
+            % (result["all_targets_present"], result["present_targets"], result["missing_targets"])
+        )
+        return result
+
+    def _dyfo_recover_missing_targets(self, original, current_box, required_targets, missing_targets, question):
+        missing_targets = self._dyfo_unique_targets(missing_targets)
+        if not missing_targets:
+            return current_box, {
+                "recovered": False,
+                "reason": "no_missing_targets",
+                "missing_targets": [],
+                "recovery_boxes": [],
+            }
+
+        if missing_targets == ["spatial_context"]:
+            recovered_box = self._dyfo_expand_box(
+                current_box, original.size, getattr(self.args, "dyfo_scatter_scale", 1.6)
+            ) if current_box else (0, 0, original.width, original.height)
+            crop = self._dyfo_crop_for_node(original, recovered_box)
+            retention = self._dyfo_check_all_targets_present(crop, required_targets, question)
+            trace = {
+                "recovered": retention["all_targets_present"],
+                "reason": "zoom_out_for_spatial_context",
+                "missing_targets": missing_targets,
+                "recovery_boxes": [current_box] if current_box else [],
+                "recovered_box": recovered_box,
+                "retention": retention,
+            }
+            print(
+                "[dyfo] spatial-context recovery recovered=%s box=%s"
+                % (trace["recovered"], recovered_box)
+            )
+            return recovered_box, trace
+
+        recovery_result = self._dyfo_locate_required_targets(original, missing_targets, allow_joined_query=True)
+        recovery_boxes = list(recovery_result.get("support_boxes", []))
+        if current_box:
+            recovery_boxes.append(current_box)
+        recovered_box = self._dyfo_union_boxes(
+            recovery_boxes, original.size, getattr(self.args, "dyfo_focus_padding", 1.2)
+        )
+        if recovered_box is None:
+            recovered_box = self._dyfo_expand_box(
+                current_box, original.size, getattr(self.args, "dyfo_scatter_scale", 1.6)
+            ) if current_box else (0, 0, original.width, original.height)
+
+        crop = self._dyfo_crop_for_node(original, recovered_box)
+        retention = self._dyfo_check_all_targets_present(crop, required_targets, question)
+        trace = {
+            "recovered": retention["all_targets_present"],
+            "missing_targets": missing_targets,
+            "recovery_boxes": recovery_boxes,
+            "recovered_box": recovered_box,
+            "retention": retention,
+        }
+        print(
+            "[dyfo] missing-target recovery recovered=%s box=%s"
+            % (trace["recovered"], recovered_box)
+        )
+        return recovered_box, trace
+
     def _dyfo_expand_box(self, box, image_size, scale):
         w, h = image_size
         x1, y1, x2, y2 = box
@@ -3628,6 +4210,36 @@ class onion:
         if x2 <= x1 or y2 <= y1:
             return image_pil
         return image_pil.crop((x1, y1, x2, y2))
+
+    def _dyfo_resize_like_original(self, crop, original):
+        resampling = getattr(Image, "Resampling", Image).BICUBIC
+        return crop.resize(original.size, resampling)
+
+    def _dyfo_build_answer_image(self, original, focus_crop, image_filename):
+        mode = getattr(self.args, "dyfo_answer_image_mode", "crop")
+        os.makedirs(self.args.cache_path, exist_ok=True)
+
+        if mode == "crop":
+            answer_image = focus_crop
+        elif mode == "resized_crop":
+            answer_image = self._dyfo_resize_like_original(focus_crop, original)
+        else:
+            resized_focus = self._dyfo_resize_like_original(focus_crop, original)
+            if mode == "concat_vertical":
+                answer_image = Image.new("RGB", (original.width, original.height * 2), "white")
+                answer_image.paste(original, (0, 0))
+                answer_image.paste(resized_focus, (0, original.height))
+            else:
+                answer_image = Image.new("RGB", (original.width * 2, original.height), "white")
+                answer_image.paste(original, (0, 0))
+                answer_image.paste(resized_focus, (original.width, 0))
+
+        answer_image_path = os.path.join(
+            self.args.cache_path,
+            "dyfo_answer_%s_%s" % (mode, image_filename)
+        )
+        answer_image.save(answer_image_path)
+        return answer_image_path
 
     def _dyfo_consistency_check(self, crop, focus_text, question):
         temp_path = None
@@ -3689,14 +4301,13 @@ class onion:
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
 
-    def _dyfo_node_reward(self, visual_hit, lmm_consistent, area_ratio):
+    def _dyfo_node_reward(self, visual_hit, lmm_consistent, area_ratio, all_targets_present=True):
+        if not all_targets_present:
+            return 0.0
         if not visual_hit:
             return 0.0
         consistency = 1.0 if lmm_consistent > 0 else 0.0
-        if getattr(self.args, "dyfo_area_reward", "compact") == "paper":
-            area_score = area_ratio
-        else:
-            area_score = 1.0 - area_ratio
+        area_score = 1.0 - area_ratio
         return max(0.0, min(1.0, consistency * area_score))
 
     def _dyfo_weighted_vote(self, nodes):
@@ -3704,6 +4315,8 @@ class onion:
         norm_to_answer = {}
         vote_items = []
         for node in nodes:
+            if getattr(node, "required_targets", []) and not getattr(node, "all_targets_present", False):
+                continue
             answer = self._clean_short_answer(getattr(node, "local_answer", ""))
             if not answer:
                 continue
@@ -3741,14 +4354,60 @@ class onion:
         if not self._dyfo_should_trigger(question, question_type):
             return {"evidence": "", "focus_image_path": None, "trace": "skipped_by_trigger"}
 
-        _, selected_objects = self.init_attention_object(key, attr_list, image_path, ban_option=[])
-        obj_list = list(dict.fromkeys((obj_list or []) + selected_objects))
+        free_key_objects, key_object_response = self.extract_key_objects_from_question(question)
+        selected_objects = []
+        candidate_fallback_triggered = False
+
+        def ensure_candidate_selected(reason):
+            nonlocal selected_objects, candidate_fallback_triggered
+            if not selected_objects:
+                candidate_fallback_triggered = True
+                _, selected_objects = self.init_attention_object(key, attr_list, image_path, ban_option=[])
+                print("[dyfo] candidate-selected objects (%s): %s" % (reason, selected_objects))
+            return selected_objects
+
+        if not free_key_objects:
+            ensure_candidate_selected("free_key_object_extraction_failed")
+        else:
+            print("[dyfo] candidate-selected objects (not triggered yet): []")
+
+        required_targets = self._dyfo_unique_targets(free_key_objects or selected_objects)
+        obj_list = list(dict.fromkeys((free_key_objects or []) + (obj_list or []) + selected_objects))
         if not obj_list:
             obj_list = selected_objects
 
+        def locate_with_lazy_candidates(image_pil, focus_text):
+            box, query, source, fallback_triggered = self._dyfo_locate_with_fallbacks(
+                image_pil, focus_text, key_objects=free_key_objects, selected_objects=selected_objects
+            )
+            if box is None and not selected_objects:
+                ensure_candidate_selected("langsam_focus_and_key_object_failed")
+                box, query, source, fallback_triggered = self._dyfo_locate_with_fallbacks(
+                    image_pil, "", key_objects=[], selected_objects=selected_objects
+                )
+            return box, query, source, fallback_triggered
+
         original = Image.open(image_path).convert("RGB")
         image_area = max(1, original.width * original.height)
-        initial_focus, initial_focus_response = self._dyfo_initial_focus(question, obj_list)
+        initial_required_locate = self._dyfo_locate_required_targets(
+            original, required_targets, allow_joined_query=True
+        ) if required_targets else {
+            "required_targets": [],
+            "target_boxes": {},
+            "missing_targets": [],
+            "all_targets_located": True,
+            "support_boxes": [],
+            "joined_box": None,
+            "union_box": None,
+            "query_log": [],
+        }
+        initial_focus, initial_focus_response = self._dyfo_initial_focus(
+            question, obj_list=selected_objects or obj_list, key_objects=free_key_objects
+        )
+        print("[dyfo] final initial focus cue:", initial_focus)
+        print("[dyfo] free key-object fallback triggered:", not bool(free_key_objects))
+        print("[dyfo] required_targets:", required_targets)
+        print("[dyfo] initial required-target missing:", initial_required_locate.get("missing_targets", []))
 
         class _Node:
             def __init__(self, focus, box, depth, parent=None, action="root"):
@@ -3770,8 +4429,30 @@ class onion:
                 self.local_answer = ""
                 self.local_answer_response = ""
                 self.local_answer_prompt = ""
+                self.langsam_query = ""
+                self.langsam_query_source = "root" if action == "root" else ""
+                self.langsam_fallback_triggered = False
+                self.required_targets = []
+                self.target_boxes = {}
+                self.missing_targets = []
+                self.all_targets_present = True
+                self.target_retention_trace = {}
+                self.target_recovery_trace = {}
+                self.area_ratio = 1.0
+                self.answer_image_fallback = False
 
         root = _Node(initial_focus, (0, 0, original.width, original.height), 0)
+        root.required_targets = required_targets
+        root.target_boxes = initial_required_locate.get("target_boxes", {})
+        root.missing_targets = initial_required_locate.get("missing_targets", [])
+        root.all_targets_present = True
+        root.target_retention_trace = {
+            "all_targets_present": True,
+            "present_targets": required_targets,
+            "missing_targets": [],
+            "locate_trace": initial_required_locate.get("query_log", []),
+            "note": "root uses the original image as fallback when no valid focused crop exists",
+        }
         nodes = [root]
 
         def select_node(node):
@@ -3806,38 +4487,93 @@ class onion:
 
                 if action == "semantic_focus":
                     base_crop = parent_crop
-                    local_box = self._dyfo_locate_focus(base_crop, focus)
+                    local_box, locate_query, locate_source, locate_fallback = locate_with_lazy_candidates(base_crop, focus)
                     if local_box:
-                        lx1, ly1, lx2, ly2 = local_box
-                        px1, py1, _, _ = leaf.box
-                        box = (px1 + lx1, py1 + ly1, px1 + lx2, py1 + ly2)
+                        box = self._dyfo_abs_box_from_local(local_box, leaf.box)
                     else:
                         box = leaf.box
                 else:
-                    located = self._dyfo_locate_focus(parent_crop, focus)
+                    located, locate_query, locate_source, locate_fallback = locate_with_lazy_candidates(parent_crop, focus)
                     if located:
-                        lx1, ly1, lx2, ly2 = located
-                        px1, py1, _, _ = leaf.box
-                        local_abs = (px1 + lx1, py1 + ly1, px1 + lx2, py1 + ly2)
+                        local_abs = self._dyfo_abs_box_from_local(located, leaf.box)
                         box = self._dyfo_expand_box(local_abs, original.size, self.args.dyfo_scatter_scale)
                     else:
                         box = self._dyfo_expand_box(leaf.box, original.size, self.args.dyfo_scatter_scale)
+
+                target_locate_trace = {}
+                if required_targets:
+                    parent_target_locate = self._dyfo_locate_required_targets(
+                        parent_crop, required_targets, allow_joined_query=True
+                    )
+                    abs_support_boxes = [
+                        self._dyfo_abs_box_from_local(local_target_box, leaf.box)
+                        for local_target_box in parent_target_locate.get("support_boxes", [])
+                    ]
+                    abs_support_boxes = [local_target_box for local_target_box in abs_support_boxes if local_target_box]
+                    union_inputs = list(abs_support_boxes)
+                    if box:
+                        union_inputs.append(box)
+                    target_union = self._dyfo_union_boxes(
+                        union_inputs, original.size, self.args.dyfo_focus_padding
+                    )
+                    if target_union is not None:
+                        box = target_union
+                    target_locate_trace = parent_target_locate
                 box = self._dyfo_expand_box(box, original.size, self.args.dyfo_focus_padding)
                 target = _Node(focus, box, leaf.depth + 1, parent=leaf, action=action)
                 target.focus_response = focus_response
+                target.langsam_query = locate_query
+                target.langsam_query_source = locate_source
+                target.langsam_fallback_triggered = locate_fallback
+                target.required_targets = required_targets
+                target.target_retention_trace = {"candidate_locate": target_locate_trace}
                 leaf.children.append(target)
                 nodes.append(target)
 
             crop = self._dyfo_crop_for_node(original, target.box)
-            visual_hit = self._dyfo_locate_focus(crop, target.focus) is not None
+            hit_box, hit_query, hit_source, hit_fallback = locate_with_lazy_candidates(crop, target.focus)
+            visual_hit = hit_box is not None
+            retention = self._dyfo_check_all_targets_present(crop, required_targets, question)
+            if required_targets and not retention["all_targets_present"]:
+                recovered_box, recovery_trace = self._dyfo_recover_missing_targets(
+                    original, target.box, required_targets, retention["missing_targets"], question
+                )
+                recovered_crop = self._dyfo_crop_for_node(original, recovered_box)
+                recovered_retention = recovery_trace.get("retention", retention)
+                if recovered_retention.get("all_targets_present"):
+                    target.box = recovered_box
+                    target.image_region = recovered_box
+                    crop = recovered_crop
+                    retention = recovered_retention
+                target.target_recovery_trace = recovery_trace
+                hit_box, hit_query, hit_source, hit_fallback = locate_with_lazy_candidates(crop, target.focus)
+                visual_hit = hit_box is not None
             lmm_consistent, lmm_reply = self._dyfo_consistency_check(crop, target.focus, question)
             x1, y1, x2, y2 = target.box
             area_ratio = max(0.0, min(1.0, ((x2 - x1) * (y2 - y1)) / image_area))
-            reward = self._dyfo_node_reward(visual_hit, lmm_consistent, area_ratio)
+            reward = self._dyfo_node_reward(
+                visual_hit, lmm_consistent, area_ratio,
+                all_targets_present=retention["all_targets_present"]
+            )
             target.reward = reward
             target.visual_hit = visual_hit
             target.lmm_reply = lmm_reply
-            if self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote") and not target.local_answer:
+            target.area_ratio = area_ratio
+            target.all_targets_present = retention["all_targets_present"]
+            target.missing_targets = retention["missing_targets"]
+            target.target_boxes = retention["target_boxes"]
+            previous_trace = target.target_retention_trace or {}
+            previous_trace.update(retention)
+            target.target_retention_trace = previous_trace
+            if hit_query:
+                target.langsam_query = hit_query
+                target.langsam_query_source = hit_source
+                target.langsam_fallback_triggered = target.langsam_fallback_triggered or hit_fallback
+            if (
+                self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote")
+                and not target.local_answer
+                and (not required_targets or target.all_targets_present)
+            ):
                 local_answer, local_response, local_prompt = self._dyfo_answer_from_crop(
                     crop, target.focus, question
                 )
@@ -3850,7 +4586,19 @@ class onion:
                 node.value += reward
                 node = node.parent
 
-        best_node = max(nodes, key=lambda n: (n.reward, n.value / max(1, n.visits), -n.depth))
+        valid_nodes = [
+            node for node in nodes
+            if (not getattr(node, "required_targets", []) or getattr(node, "all_targets_present", False))
+        ]
+        focused_valid_nodes = [node for node in valid_nodes if node.depth > 0]
+        if focused_valid_nodes:
+            best_node = max(focused_valid_nodes, key=lambda n: (n.reward, n.value / max(1, n.visits), -n.depth))
+            final_crop_fallback = False
+        else:
+            best_node = root
+            best_node.answer_image_fallback = True
+            final_crop_fallback = True
+            print("[dyfo] no focused crop passed all-target retention; fallback to original image")
         best_crop = self._dyfo_crop_for_node(original, best_node.box)
         if self.args.dyfo_decision_mode == "best_focus_answer" and not best_node.local_answer:
             local_answer, local_response, local_prompt = self._dyfo_answer_from_crop(
@@ -3863,6 +4611,7 @@ class onion:
         focus_image_path = os.path.join(self.args.cache_path, "dyfo_focus_%s" % image_filename)
         os.makedirs(self.args.cache_path, exist_ok=True)
         best_crop.save(focus_image_path)
+        answer_image_path = self._dyfo_build_answer_image(original, best_crop, image_filename)
 
         evidence_prompt = (
             "Write concise visual evidence from this focused image crop for answering the question.\n"
@@ -3875,13 +4624,31 @@ class onion:
             evidence_prompt, image_path=focus_image_path, max_new_tokens=self.args.dyfo_evidence_max_tokens
         )
         evidence = (
-            "Focus: %s. Search action: %s. Reward: %.3f. Evidence: %s"
-            % (best_node.focus, best_node.action, best_node.reward, self._truncate_text(evidence_response, 700))
+            "Focus: %s. Search action: %s. Reward: %.3f. Required targets: %s. Evidence: %s"
+            % (
+                best_node.focus,
+                best_node.action,
+                best_node.reward,
+                ", ".join(required_targets) if required_targets else "none",
+                self._truncate_text(evidence_response, 700),
+            )
         )
         final_answer = ""
         decision_trace = {
             "mode": self.args.dyfo_decision_mode,
             "best_focus_answer": best_node.local_answer,
+            "free_key_objects": free_key_objects,
+            "required_targets": required_targets,
+            "candidate_selected_objects": selected_objects,
+            "candidate_fallback_triggered": candidate_fallback_triggered,
+            "best_focus": best_node.focus,
+            "best_langsam_query": best_node.langsam_query,
+            "best_langsam_query_source": best_node.langsam_query_source,
+            "best_langsam_fallback_triggered": best_node.langsam_fallback_triggered,
+            "best_all_targets_present": best_node.all_targets_present,
+            "best_missing_targets": best_node.missing_targets,
+            "best_target_retention_trace": best_node.target_retention_trace,
+            "final_crop_fallback_to_original": final_crop_fallback,
         }
         if self.args.dyfo_decision_mode == "best_focus_answer":
             final_answer = best_node.local_answer
@@ -3889,12 +4656,26 @@ class onion:
             final_answer, vote_trace = self._dyfo_weighted_vote(nodes)
             decision_trace.update(vote_trace)
         trace = {
+            "free_key_objects": free_key_objects,
+            "free_key_object_response": key_object_response,
+            "required_targets": required_targets,
+            "initial_required_target_locate": initial_required_locate,
+            "candidate_selected_objects": selected_objects,
+            "candidate_fallback_triggered": candidate_fallback_triggered,
             "initial_focus": initial_focus,
             "initial_focus_response": initial_focus_response,
             "best_focus": best_node.focus,
             "best_action": best_node.action,
             "best_box": best_node.box,
             "best_reward": best_node.reward,
+            "best_langsam_query": best_node.langsam_query,
+            "best_langsam_query_source": best_node.langsam_query_source,
+            "best_langsam_fallback_triggered": best_node.langsam_fallback_triggered,
+            "best_all_targets_present": best_node.all_targets_present,
+            "best_missing_targets": best_node.missing_targets,
+            "best_target_boxes": best_node.target_boxes,
+            "best_target_retention_trace": best_node.target_retention_trace,
+            "final_crop_fallback_to_original": final_crop_fallback,
             "best_focus_answer": best_node.local_answer,
             "dyfo_decision_mode": self.args.dyfo_decision_mode,
             "dyfo_final_answer": final_answer,
@@ -3908,20 +4689,37 @@ class onion:
                     "box": node.box,
                     "image_region": node.image_region,
                     "reward": node.reward,
+                    "area_ratio": node.area_ratio,
                     "visits": node.visits,
                     "visual_hit": node.visual_hit,
                     "lmm_reply": node.lmm_reply,
+                    "langsam_query": node.langsam_query,
+                    "langsam_query_source": node.langsam_query_source,
+                    "langsam_fallback_triggered": node.langsam_fallback_triggered,
+                    "required_targets": node.required_targets,
+                    "all_targets_present": node.all_targets_present,
+                    "missing_targets": node.missing_targets,
+                    "target_boxes": node.target_boxes,
+                    "target_retention_trace": node.target_retention_trace,
+                    "target_recovery_trace": node.target_recovery_trace,
                     "local_answer": node.local_answer,
                 }
                 for node in nodes
             ],
         }
         print("[dyfo] visual evidence:", evidence)
+        print("[dyfo] best focus cue:", best_node.focus)
+        print("[dyfo] best LangSAM query source:", best_node.langsam_query_source)
+        print("[dyfo] best LangSAM fallback triggered:", best_node.langsam_fallback_triggered)
+        print("[dyfo] best all-target present:", best_node.all_targets_present)
+        print("[dyfo] best missing targets:", best_node.missing_targets)
+        print("[dyfo] final crop fallback to original:", final_crop_fallback)
         if final_answer:
             print("[dyfo] final answer:", final_answer)
         return {
             "evidence": evidence,
             "focus_image_path": focus_image_path,
+            "answer_image_path": answer_image_path,
             "final_answer": final_answer,
             "decision_trace": decision_trace,
             "trace": trace,
@@ -5017,11 +5815,14 @@ def parser_args():
                         help='padding scale around localized focus boxes')
     parser.add_argument('--dyfo_area_reward', type=str, default='compact',
                         choices=['compact', 'paper'],
-                        help='compact rewards small consistent regions; paper uses the raw area ratio')
+                        help='kept for compatibility; DyFo reward now hard-gates target retention and uses 1 - area_ratio')
     parser.add_argument('--dyfo_text_focus_use_image', action='store_true',
                         help='let Qwen see the current crop while updating the textual focus')
     parser.add_argument('--dyfo_use_focus_image_as_answer', action='store_true',
-                        help='answer on the best DyFo focus crop instead of only injecting evidence')
+                        help='answer on a DyFo-derived image instead of only injecting evidence')
+    parser.add_argument('--dyfo_answer_image_mode', type=str, default='crop',
+                        choices=['crop', 'resized_crop', 'concat_horizontal', 'concat_vertical'],
+                        help='image passed to final MLLM when --dyfo_use_focus_image_as_answer is set: best crop, resized crop, or original plus resized focus crop')
     parser.add_argument('--dyfo_decision_mode', type=str, default='evidence_inject',
                         choices=['evidence_inject', 'best_focus_answer', 'weighted_vote'],
                         help='DyFo final decision: inject evidence into the normal answer path, answer from the best focus node, or reward-weighted vote over focus nodes')
@@ -5162,7 +5963,7 @@ def parser_args():
     parser.add_argument('--strategy_router_default', type=str, default='direct',
                         help='fallback strategy when RAG evidence is weak')
     parser.add_argument('--strategy_cot_runtime', type=str, default='protected_reflective',
-                        choices=['protected_reflective', 'answer_first_locked', 'complex_decompose'],
+                        choices=['protected_reflective', 'answer_first_locked', 'complex_decompose', 'dyfo_evidence'],
                         help='runtime behavior when rag_strategy_router selects the CoT strategy')
     parser.add_argument('--strategy_router_mode', type=str, default='conservative_risk',
                         choices=['direct_failure', 'direct_vs_complex', 'qtype_conditional',
@@ -5198,11 +5999,17 @@ def parser_args():
                         help='default strategy for --cot_style multi_strategy_router')
     parser.add_argument('--multi_strategy_margin', type=float, default=0.08,
                         help='minimum best_strategy_avg - default_avg needed to route away from default')
+    parser.add_argument('--multi_strategy_router_source', type=str, default='profile',
+                        choices=['profile', 'mllm'],
+                        help='profile uses retrieved strategy scores; mllm asks the model to choose a strategy from the question')
     # ----caption策略
     parser.add_argument('--random_caption', action='store_true')
     parser.add_argument('--remove_caption', action='store_true')
     # 数据集选择-验证测试
-    parser.add_argument('--dataset_name', type=str, default='aokvqa', help='aokvqa, okvqa, vqav2, pope, mme, hallusionbench')
+    parser.add_argument('--dataset_root', type=str, default='/data2/lizhengxue/datasets',
+                        help='root directory containing local VQA benchmark folders')
+    parser.add_argument('--dataset_name', type=str, default='aokvqa',
+                        help='aokvqa, okvqa, vqav2, gqa, textvqa, infoseek, pope, mme, mme_realworld, hallusionbench, mmstar')
     parser.add_argument('--split_name', type=str, default='val', help='train, val, test')
     # 描述文本选择
     parser.add_argument('--caption_type', type=str, default='vinvl_tag', help='vinvl_tag, vinvl, vinvl_sg, vinvl_ocr')
@@ -5225,21 +6032,125 @@ def parser_args():
     parser.add_argument('--aokvqa_context_path', type=str,
                         default='/data2/lizhengxue/datasets/aokvqa',
                         help='A-OKVQA annotation directory reused as few-shot context for datasets without train annotations')
+    parser.add_argument('--gqa_question_file', type=str, default='',
+                        help='Optional GQA question JSON file or zip member override.')
     parser.add_argument('--mme_manifest_file', type=str, default='',
                         help='Prepared MME jsonl manifest with materialized image paths.')
     parser.add_argument('--valcaption_file', type=str, default='/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-data/input_text/vinvl_caption/VinVL_base_val2014.tsv')
 
     args = parser.parse_args()
+    args = resolve_dataset_paths(args)
 
     return args
 
 
+def normalize_dataset_name(name):
+    name = str(name or "").strip().lower().replace("-", "_")
+    aliases = {
+        "a_okvqa": "aokvqa",
+        "a_ok_vqa": "aokvqa",
+        "ok_vqa": "okvqa",
+        "vqa_v2": "vqav2",
+        "vqa2": "vqav2",
+        "text_vqa": "textvqa",
+        "info_seek": "infoseek",
+        "mme_real_world": "mme_realworld",
+        "mme_realworld": "mme_realworld",
+        "mme_rw": "mme_realworld",
+        "mm_star": "mmstar",
+    }
+    return aliases.get(name, name)
+
+
+def resolve_dataset_paths(args):
+    args.dataset_name = normalize_dataset_name(args.dataset_name)
+    dataset_dirs = {
+        "aokvqa": "aokvqa",
+        "okvqa": "okvqa",
+        "vqav2": "vqav2",
+        "gqa": "gqa",
+        "textvqa": "textvqa",
+        "infoseek": "infoseek",
+        "pope": "pope",
+        "mme": "mme",
+        "mme_realworld": "mme-realworld",
+        "hallusionbench": "hallusionbench",
+        "mmstar": "mmstar",
+    }
+    default_coco_path = "/data2/lizhengxue/datasets/aokvqa"
+    if args.dataset_name in dataset_dirs and (
+        not args.coco_path or os.path.abspath(args.coco_path) == os.path.abspath(default_coco_path)
+    ):
+        candidate = os.path.join(args.dataset_root, dataset_dirs[args.dataset_name])
+        if args.dataset_name == "mme_realworld" and not os.path.isdir(candidate):
+            for dirname in ("mme_realworld", "MME-RealWorld", "mme"):
+                alt = os.path.join(args.dataset_root, dirname)
+                if os.path.isdir(alt):
+                    candidate = alt
+                    break
+        args.coco_path = candidate
+
+    default_raw_image_dir = "/data2/lizhengxue/datasets/coco17"
+    if not args.raw_image_dir or os.path.abspath(args.raw_image_dir) == os.path.abspath(default_raw_image_dir):
+        if args.dataset_name in ("aokvqa",):
+            args.raw_image_dir = os.path.join(args.dataset_root, "coco17")
+        elif args.dataset_name in ("okvqa", "vqav2", "pope"):
+            args.raw_image_dir = os.path.join(args.dataset_root, "coco14")
+        elif args.dataset_name == "gqa":
+            args.raw_image_dir = os.path.join(args.dataset_root, "visualgenome")
+        elif args.dataset_name in ("textvqa", "infoseek", "mme_realworld", "hallusionbench", "mmstar"):
+            args.raw_image_dir = args.coco_path
+        elif args.dataset_name == "mme":
+            args.raw_image_dir = args.coco_path
+
+    if args.dataset_name == "mme_realworld" and not os.path.isdir(args.coco_path):
+        print(f"[dataset] MME-RealWorld path not found: {args.coco_path}; pass --coco_path when available.")
+    if args.dataset_name == "infoseek" and not os.path.isdir(args.coco_path):
+        print(f"[dataset] InfoSeek path not found: {args.coco_path}; pass --coco_path when available.")
+    return args
+
+
+def dataset_accuracy_label(dataset_name, full=False):
+    dataset_name = normalize_dataset_name(dataset_name)
+    labels = {
+        "aokvqa": "A-OKVQA",
+        "okvqa": "OK-VQA",
+        "vqav2": "VQAv2",
+        "gqa": "GQA",
+        "textvqa": "TextVQA",
+        "infoseek": "InfoSeek",
+        "pope": "POPE",
+        "mme": "MME",
+        "mme_realworld": "MME-RealWorld",
+        "hallusionbench": "HallusionBench",
+        "mmstar": "MMStar",
+    }
+    label = labels.get(dataset_name, "官方DA")
+    return f"全量{label}诊断" if full else f"{label}准确率"
+
+
 def load_official_da_eval_keys(args):
+    args.dataset_name = normalize_dataset_name(args.dataset_name)
     if args.dataset_name == "mme":
         answer_by_key, official_keys = load_mme_answer_annotations(args)
         return official_keys
+    if args.dataset_name == "mme_realworld":
+        answer_by_key, official_keys = load_generic_vqa_answer_annotations(args, "mme_realworld")
+        return official_keys
     if args.dataset_name == "hallusionbench":
         answer_by_key, official_keys = load_hallusionbench_answer_annotations(args)
+        return official_keys
+    if args.dataset_name == "mmstar":
+        answer_by_key, official_keys = load_generic_vqa_answer_annotations(args, "mmstar")
+        return official_keys
+    if args.dataset_name == "gqa":
+        answer_by_key, official_keys = load_gqa_answer_annotations(args)
+        return official_keys
+    if args.dataset_name == "textvqa":
+        answer_by_key, official_keys = load_textvqa_answer_annotations(args)
+        return official_keys
+    if args.dataset_name == "infoseek":
+        answer_by_key, official_keys = load_generic_vqa_answer_annotations(args, "infoseek")
         return official_keys
     if args.dataset_name == "pope":
         answer_by_key, official_keys = load_direct_answer_annotations(args)
@@ -5269,11 +6180,27 @@ def load_official_da_eval_keys(args):
 
 
 def load_direct_answer_annotations(args):
+    args.dataset_name = normalize_dataset_name(args.dataset_name)
     if args.dataset_name == "mme":
         return load_mme_answer_annotations(args)
 
+    if args.dataset_name == "mme_realworld":
+        return load_generic_vqa_answer_annotations(args, "mme_realworld")
+
     if args.dataset_name == "hallusionbench":
         return load_hallusionbench_answer_annotations(args)
+
+    if args.dataset_name == "mmstar":
+        return load_generic_vqa_answer_annotations(args, "mmstar")
+
+    if args.dataset_name == "gqa":
+        return load_gqa_answer_annotations(args)
+
+    if args.dataset_name == "textvqa":
+        return load_textvqa_answer_annotations(args)
+
+    if args.dataset_name == "infoseek":
+        return load_generic_vqa_answer_annotations(args, "infoseek")
 
     if args.dataset_name == "pope":
         subsets = ["random", "popular", "adversarial"] if args.split_name == "all" else [args.split_name]
@@ -5355,7 +6282,7 @@ def direct_answer_eval_report(args, answers):
             official_score = yes_no_answer_score(pred, gold)
             legacy_score = official_score
         else:
-            official_score = official_direct_answer_score(pred, gold)
+            official_score = open_ended_answer_score(pred, gold)
             legacy_score = legacy_normalized_direct_answer_score(pred, gold)
         official_full_scores.append(official_score)
         legacy_all_scores.append(legacy_score)
@@ -5374,23 +6301,9 @@ def direct_answer_eval_report(args, answers):
     official_full_pct, official_full_sum, official_full_total = _summarize(official_full_scores)
     legacy_full_pct, legacy_full_sum, legacy_full_total = _summarize(legacy_all_scores)
 
-    if args.dataset_name == "pope":
-        primary_label = "POPE准确率"
-    elif args.dataset_name == "mme":
-        primary_label = "MME准确率"
-    elif args.dataset_name == "hallusionbench":
-        primary_label = "HallusionBench准确率"
-    else:
-        primary_label = "VQAv2准确率" if args.dataset_name == "vqav2" else ("OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率")
+    primary_label = dataset_accuracy_label(args.dataset_name, full=False)
     if args.eval_all_direct_answers:
-        if args.dataset_name == "pope":
-            primary_label = "全量POPE诊断"
-        elif args.dataset_name == "mme":
-            primary_label = "全量MME诊断"
-        elif args.dataset_name == "hallusionbench":
-            primary_label = "全量HallusionBench诊断"
-        else:
-            primary_label = "全量VQAv2诊断" if args.dataset_name == "vqav2" else ("全量OK-VQA诊断" if args.dataset_name == "okvqa" else "全量官方DA诊断")
+        primary_label = dataset_accuracy_label(args.dataset_name, full=True)
         primary_pct, primary_sum, primary_total = official_full_pct, official_full_sum, official_full_total
     else:
         primary_pct, primary_sum, primary_total = official_pct, official_sum, official_total
@@ -5413,9 +6326,9 @@ def direct_answer_eval_report(args, answers):
         "legacy_full_sum": legacy_full_sum,
         "legacy_full_total": legacy_full_total,
         "lines": [
-            f"{'POPE准确率' if args.dataset_name == 'pope' else ('MME准确率' if args.dataset_name == 'mme' else ('HallusionBench准确率' if args.dataset_name == 'hallusionbench' else ('VQAv2准确率' if args.dataset_name == 'vqav2' else ('OK-VQA准确率' if args.dataset_name == 'okvqa' else '官方DA准确率'))))}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
-            f"旧指标@{'POPE' if args.dataset_name == 'pope' else ('MME' if args.dataset_name == 'mme' else ('HallusionBench' if args.dataset_name == 'hallusionbench' else ('VQAv2' if args.dataset_name == 'vqav2' else ('OK-VQA' if args.dataset_name == 'okvqa' else '官方DA子集'))))}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
-            f"{'全量POPE诊断' if args.dataset_name == 'pope' else ('全量MME诊断' if args.dataset_name == 'mme' else ('全量HallusionBench诊断' if args.dataset_name == 'hallusionbench' else ('全量VQAv2诊断' if args.dataset_name == 'vqav2' else ('全量OK-VQA诊断' if args.dataset_name == 'okvqa' else '全量官方DA诊断'))))}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
+            f"{dataset_accuracy_label(args.dataset_name, full=False)}: {official_pct:.2f}% ({official_sum:.2f}/{official_total})",
+            f"旧指标@{dataset_accuracy_label(args.dataset_name, full=False).replace('准确率', '')}: {legacy_official_pct:.2f}% ({legacy_official_sum:.2f}/{legacy_official_total})",
+            f"{dataset_accuracy_label(args.dataset_name, full=True)}: {official_full_pct:.2f}% ({official_full_sum:.2f}/{official_full_total})",
             f"旧指标@全量诊断: {legacy_full_pct:.2f}% ({legacy_full_sum:.2f}/{legacy_full_total})",
         ],
     }
@@ -5428,14 +6341,7 @@ def official_da_eval_answers(args, answers):
     else:
         eval_keys = load_official_da_eval_keys(args)
         eval_answers = [a for a in answers if a[0] in eval_keys]
-        if args.dataset_name == "pope":
-            label = "POPE准确率"
-        elif args.dataset_name == "mme":
-            label = "MME准确率"
-        elif args.dataset_name == "hallusionbench":
-            label = "HallusionBench准确率"
-        else:
-            label = "VQAv2准确率" if args.dataset_name == "vqav2" else ("OK-VQA准确率" if args.dataset_name == "okvqa" else "官方DA准确率")
+        label = dataset_accuracy_label(args.dataset_name, full=False)
     if not eval_answers:
         return 0.0, 0.0, 0, label
     acc = sum(float(a[3]) for a in eval_answers)
@@ -5542,12 +6448,22 @@ def main():
         aokvqa_data = okvqa_dataset(args)
     elif args.dataset_name == "vqav2":
         aokvqa_data = vqav2_dataset(args)
+    elif args.dataset_name == "gqa":
+        aokvqa_data = gqa_dataset(args)
+    elif args.dataset_name == "textvqa":
+        aokvqa_data = textvqa_dataset(args)
+    elif args.dataset_name == "infoseek":
+        aokvqa_data = infoseek_dataset(args)
     elif args.dataset_name == "pope":
         aokvqa_data = pope_dataset(args)
     elif args.dataset_name == "mme":
         aokvqa_data = mme_dataset(args)
+    elif args.dataset_name == "mme_realworld":
+        aokvqa_data = mme_realworld_dataset(args)
     elif args.dataset_name == "hallusionbench":
         aokvqa_data = hallusionbench_dataset(args)
+    elif args.dataset_name == "mmstar":
+        aokvqa_data = mmstar_dataset(args)
     else:
         aokvqa_data = aokvqa_dataset(args)
 

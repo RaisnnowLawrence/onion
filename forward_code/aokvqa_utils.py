@@ -14,10 +14,71 @@ import pdb
 import pickle
 import glob
 import io
+import zipfile
 from transformers import CLIPProcessor, CLIPModel
 from transformers import CLIPTokenizer, CLIPTextModel
 from PIL import Image
 import datetime
+
+
+def _empty_train_context(dataset):
+    dataset.traincontext_caption_dict = {}
+    dataset.traincontext_answer_dict = {}
+    dataset.traincontext_question_dict = {}
+    dataset.traincontext_rationale_dict = {}
+    dataset.traincontext_choices_dict = {}
+    dataset.traincontext_interactive_answer_dict = {}
+    dataset.traincontext_interactive_question_dict = {}
+    dataset.train_keys = []
+    dataset.train_interactive_keys = []
+
+
+def _setup_generic_paths(dataset):
+    dataset.sg_dir = os.path.join(dataset.args.sg_path, "scene_graph_coco17_attr")
+    dataset.sg_attr_dir = os.path.join(dataset.args.sg_path, "scene_graph_coco17_attr")
+    dataset.sg_cap_dir = os.path.join(dataset.args.sg_path, dataset.args.concept_caption_path)
+    dataset.train_ocr_text = {}
+    dataset.val_ocr_text = {}
+
+
+def _as_answer_list(value):
+    if value is None:
+        return [""]
+    if isinstance(value, list):
+        if not value:
+            return [""]
+        out = []
+        for item in value:
+            if isinstance(item, dict):
+                out.append(str(item.get("answer") or item.get("text") or item.get("label") or ""))
+            else:
+                out.append(str(item))
+        return out
+    if isinstance(value, dict):
+        return [str(value.get("answer") or value.get("text") or value.get("label") or "")]
+    return [str(value)]
+
+
+def _load_json_or_jsonl(path):
+    if path.endswith(".jsonl"):
+        with open(path, "r", encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _records_from_json_payload(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "annotations", "questions", "examples", "samples", "instances"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
+        return [
+            dict(value, _record_id=key) if isinstance(value, dict) else {"_record_id": key, "value": value}
+            for key, value in payload.items()
+        ]
+    return []
 
 
 def bounding_box_matching(box1, box2):
@@ -515,6 +576,333 @@ class vqav2_dataset(okvqa_dataset):
     def load_similarity(self):
         self.valkey2idx = {key: idx for idx, key in enumerate(self.val_keys)}
         self.train_idx = {str(idx): key for idx, key in enumerate(getattr(self, "train_keys", []))}
+
+
+def _gqa_question_member(split_name):
+    split_map = {
+        "val": "val_balanced_questions.json",
+        "validation": "val_balanced_questions.json",
+        "testdev": "testdev_balanced_questions.json",
+        "test": "test_balanced_questions.json",
+        "challenge": "challenge_balanced_questions.json",
+        "train": "train_balanced_questions.json",
+    }
+    return split_map.get(split_name, f"{split_name}_balanced_questions.json")
+
+
+def load_gqa_records(args):
+    question_zip = os.path.join(args.coco_path, "questions1.2.zip")
+    member = getattr(args, "gqa_question_file", "") or _gqa_question_member(args.split_name)
+    if os.path.isfile(os.path.join(args.coco_path, member)):
+        payload = json.load(open(os.path.join(args.coco_path, member), "r", encoding="utf-8"))
+    elif os.path.isfile(question_zip):
+        with zipfile.ZipFile(question_zip) as zf:
+            if member not in zf.namelist():
+                raise FileNotFoundError(f"GQA member {member} not found in {question_zip}")
+            payload = json.load(zf.open(member))
+    else:
+        raise FileNotFoundError(f"GQA questions not found under {args.coco_path}")
+
+    records = []
+    for qid, sample in payload.items():
+        image_id = str(sample.get("imageId") or sample.get("image_id") or "")
+        if not image_id:
+            continue
+        question = str(sample.get("question") or "")
+        answer = sample.get("answer", "")
+        records.append({
+            "image_idx": int(image_id) if image_id.isdigit() else image_id,
+            "question_id": str(qid),
+            "key": f"{image_id}<->{qid}",
+            "question": question,
+            "answer": answer,
+            "image_id": image_id,
+            "category": sample.get("types", {}).get("semantic", ""),
+        })
+    return records
+
+
+def load_gqa_answer_annotations(args):
+    records = load_gqa_records(args)
+    answer_by_key = {rec["key"]: _as_answer_list(rec["answer"]) for rec in records}
+    return answer_by_key, set(answer_by_key)
+
+
+class gqa_dataset(aokvqa_dataset):
+    """GQA loader backed by the local questions1.2.zip and Visual Genome images."""
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("GQA is evaluated as open-ended VQA here; --choice_only is not supported.")
+
+        self.raw_image_dir = args.raw_image_dir
+        self.image_path_dict = {}
+        records = load_gqa_records(args)
+        self.answer_dict = {}
+        self.question_dict = {}
+        self.rationale_dict = {}
+        self.choices_dict = {}
+        self.inputtext_dict = {}
+        for rec in records:
+            key = rec["key"]
+            image_idx = rec["image_idx"]
+            self.answer_dict[key] = _as_answer_list(rec["answer"])
+            self.question_dict[key] = rec["question"]
+            self.rationale_dict[key] = ""
+            self.choices_dict[key] = []
+            self.inputtext_dict[image_idx] = [""]
+            self.image_path_dict[image_idx] = self._resolve_gqa_image_path(str(rec["image_id"]))
+
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+        _empty_train_context(self)
+        _setup_generic_paths(self)
+
+    def _resolve_gqa_image_path(self, image_id):
+        candidates = [
+            os.path.join(self.raw_image_dir, f"{image_id}.jpg"),
+            os.path.join(self.raw_image_dir, "VG_100K", f"{image_id}.jpg"),
+            os.path.join(self.raw_image_dir, "VG_100K_2", f"{image_id}.jpg"),
+            os.path.join(self.args.coco_path, "images", f"{image_id}.jpg"),
+            os.path.join(self.args.coco_path, "testdev_images", f"{image_id}.jpg"),
+            os.path.join(os.path.dirname(self.raw_image_dir), "visualgenome", "VG_100K", f"{image_id}.jpg"),
+            os.path.join(os.path.dirname(self.raw_image_dir), "visualgenome", "VG_100K_2", f"{image_id}.jpg"),
+        ]
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+        return candidates[0]
+
+    def load_similarity(self):
+        self.valkey2idx = {}
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        return self.image_path_dict[int(img_key) if str(img_key).isdigit() else img_key]
+
+
+def _load_textvqa_ocr(args):
+    ocr_path = os.path.join(args.coco_path, f"TextVQA_Rosetta_OCR_v0.2_{args.split_name}.json")
+    if not os.path.isfile(ocr_path):
+        return {}
+    payload = json.load(open(ocr_path, "r", encoding="utf-8"))
+    records = _records_from_json_payload(payload)
+    return {
+        str(rec.get("image_id")): "OCR tokens: " + ", ".join(rec.get("ocr_tokens", [])[:50])
+        for rec in records
+        if rec.get("image_id")
+    }
+
+
+def load_textvqa_records(args):
+    anno_file = os.path.join(args.coco_path, f"TextVQA_0.5.1_{args.split_name}.json")
+    if not os.path.isfile(anno_file):
+        raise FileNotFoundError(f"TextVQA annotation missing: {anno_file}")
+    payload = json.load(open(anno_file, "r", encoding="utf-8"))
+    records = _records_from_json_payload(payload)
+    ocr_by_image = _load_textvqa_ocr(args)
+
+    out = []
+    for idx, sample in enumerate(records):
+        image_id = str(sample.get("image_id") or sample.get("image") or "")
+        if not image_id:
+            continue
+        question_id = str(sample.get("question_id") or sample.get("id") or idx)
+        answers = sample.get("answers", [])
+        image_split_dir = "test_images" if args.split_name == "test" else "train_images"
+        out.append({
+            "image_idx": idx,
+            "question_id": question_id,
+            "key": f"{idx}<->{question_id}",
+            "question": str(sample.get("question") or sample.get("text") or ""),
+            "answer": answers,
+            "image_id": image_id,
+            "image_path": os.path.join(args.coco_path, image_split_dir, f"{image_id}.jpg"),
+            "caption": ocr_by_image.get(image_id, ""),
+        })
+    return out
+
+
+def load_textvqa_answer_annotations(args):
+    records = load_textvqa_records(args)
+    answer_by_key = {rec["key"]: _as_answer_list(rec["answer"]) for rec in records}
+    return answer_by_key, set(answer_by_key)
+
+
+class textvqa_dataset(aokvqa_dataset):
+    """TextVQA loader with OCR tokens injected as the image caption context."""
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError("TextVQA is open-ended VQA; --choice_only is not supported.")
+
+        self.raw_image_dir = args.raw_image_dir
+        self.image_path_dict = {}
+        records = load_textvqa_records(args)
+        self.answer_dict = {}
+        self.question_dict = {}
+        self.rationale_dict = {}
+        self.choices_dict = {}
+        self.inputtext_dict = {}
+        for rec in records:
+            key = rec["key"]
+            image_idx = rec["image_idx"]
+            self.answer_dict[key] = _as_answer_list(rec["answer"])
+            self.question_dict[key] = rec["question"]
+            self.rationale_dict[key] = ""
+            self.choices_dict[key] = []
+            self.inputtext_dict[image_idx] = [rec.get("caption", "")]
+            self.image_path_dict[image_idx] = rec["image_path"]
+
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+        _empty_train_context(self)
+        _setup_generic_paths(self)
+
+    def load_similarity(self):
+        self.valkey2idx = {}
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        return self.image_path_dict[int(img_key)]
+
+
+def _find_first_existing(paths):
+    for path in paths:
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def _load_tabular_records(path):
+    if path.endswith(".parquet"):
+        try:
+            import pandas as pd
+        except ImportError as exc:
+            raise ImportError("Parquet dataset loading requires pandas.") from exc
+        return pd.read_parquet(path).to_dict("records")
+    return _records_from_json_payload(_load_json_or_jsonl(path))
+
+
+def load_generic_vqa_records(args, dataset_name):
+    candidates = [
+        os.path.join(args.coco_path, f"{dataset_name}.parquet"),
+        os.path.join(args.coco_path, f"{dataset_name}.jsonl"),
+        os.path.join(args.coco_path, f"{dataset_name}.json"),
+        os.path.join(args.coco_path, f"{dataset_name}_{args.split_name}.jsonl"),
+        os.path.join(args.coco_path, f"{dataset_name}_{args.split_name}.json"),
+        os.path.join(args.coco_path, f"{args.split_name}.jsonl"),
+        os.path.join(args.coco_path, f"{args.split_name}.json"),
+        os.path.join(args.coco_path, f"{args.split_name}-00000-of-00001.parquet"),
+    ]
+    candidates.extend(sorted(glob.glob(os.path.join(args.coco_path, f"{args.split_name}-*.parquet"))))
+    anno_file = _find_first_existing(candidates)
+    if not anno_file:
+        raise FileNotFoundError(
+            f"No supported {dataset_name} annotation found under {args.coco_path}; "
+            "expected json/jsonl/parquet with question/image/answer fields."
+        )
+    rows = _load_tabular_records(anno_file)
+    image_cache_dir = os.path.join(args.cache_path, f"{dataset_name}_images")
+    os.makedirs(image_cache_dir, exist_ok=True)
+
+    records = []
+    for idx, row in enumerate(rows):
+        question = str(row.get("question") or row.get("query") or row.get("text") or row.get("prompt") or "")
+        answer = row.get("answer", row.get("answers", row.get("gt_answer", row.get("label", ""))))
+        qid = str(row.get("question_id") or row.get("qid") or row.get("id") or idx)
+        image_id = str(row.get("image_id") or row.get("imageId") or row.get("image_name") or row.get("image") or idx)
+        image_path = row.get("image_path") or row.get("img_path") or row.get("path") or ""
+        if isinstance(row.get("image"), dict):
+            image_obj = row["image"]
+            image_path = image_obj.get("path") or image_path
+            image_bytes = image_obj.get("bytes")
+            if image_bytes is not None:
+                image_path = os.path.join(image_cache_dir, f"{idx:06d}.jpg")
+                if not os.path.isfile(image_path):
+                    Image.open(io.BytesIO(image_bytes)).convert("RGB").save(image_path)
+        elif isinstance(row.get("image"), (bytes, bytearray)):
+            image_path = os.path.join(image_cache_dir, f"{idx:06d}.jpg")
+            if not os.path.isfile(image_path):
+                Image.open(io.BytesIO(row["image"])).convert("RGB").save(image_path)
+        if image_path and not os.path.isabs(image_path):
+            image_path = os.path.join(args.coco_path, image_path)
+        records.append({
+            "image_idx": idx,
+            "question_id": qid,
+            "key": f"{idx}<->{qid}",
+            "question": question,
+            "answer": answer,
+            "image_path": image_path,
+            "caption": str(row.get("caption") or row.get("context") or ""),
+            "category": str(row.get("category") or row.get("task") or ""),
+            "image_id": image_id,
+        })
+    return records
+
+
+def load_generic_vqa_answer_annotations(args, dataset_name):
+    records = load_generic_vqa_records(args, dataset_name)
+    answer_by_key = {rec["key"]: _as_answer_list(rec["answer"]) for rec in records}
+    return answer_by_key, set(answer_by_key)
+
+
+class generic_file_vqa_dataset(aokvqa_dataset):
+    """Flexible loader for local JSON/JSONL/parquet VQA-style datasets."""
+
+    generic_dataset_name = "generic"
+
+    def load_dataset(self, args):
+        if args.choice_only:
+            raise ValueError(f"{self.generic_dataset_name} is treated as open-ended VQA; --choice_only is not supported.")
+
+        self.raw_image_dir = args.raw_image_dir
+        self.image_path_dict = {}
+        records = load_generic_vqa_records(args, self.generic_dataset_name)
+        self.answer_dict = {}
+        self.question_dict = {}
+        self.rationale_dict = {}
+        self.choices_dict = {}
+        self.inputtext_dict = {}
+        for rec in records:
+            key = rec["key"]
+            image_idx = rec["image_idx"]
+            self.answer_dict[key] = _as_answer_list(rec["answer"])
+            self.question_dict[key] = rec["question"]
+            self.rationale_dict[key] = ""
+            self.choices_dict[key] = []
+            self.inputtext_dict[image_idx] = [rec.get("caption", "")]
+            self.image_path_dict[image_idx] = rec["image_path"]
+
+        self.val_keys = list(self.question_dict.keys())
+        self.direct_answer_eval_keys = set(self.val_keys)
+        _empty_train_context(self)
+        _setup_generic_paths(self)
+
+    def load_similarity(self):
+        self.valkey2idx = {}
+
+    def find_image(self, img_key):
+        return Image.open(self.find_image_path(img_key)).convert("RGB")
+
+    def find_image_path(self, img_key):
+        return self.image_path_dict[int(img_key)]
+
+
+class infoseek_dataset(generic_file_vqa_dataset):
+    generic_dataset_name = "infoseek"
+
+
+class mme_realworld_dataset(generic_file_vqa_dataset):
+    generic_dataset_name = "mme_realworld"
+
+
+class mmstar_dataset(generic_file_vqa_dataset):
+    generic_dataset_name = "mmstar"
 
 
 class pope_dataset(aokvqa_dataset):
