@@ -16,7 +16,9 @@ QWEN_MODEL_PATHS = {
     "qwen3-VL-30B": "/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-30B-A3B-Instruct",
 }
 
-# qwen输出是字符串,所以这是一个配套解决输出的函数
+# ---------------------------------------------------------------------------
+# Model initialization and response parsing
+# ---------------------------------------------------------------------------
 def string_to_list_if_possible(s):
     try:
         result = ast.literal_eval(s)
@@ -54,6 +56,9 @@ def initialize_qwen(model_name):
 
     return model, processor, tokenizer
 
+# ---------------------------------------------------------------------------
+# Chat backends
+# ---------------------------------------------------------------------------
 def chat_with_qwen_vl(
     model,
     processor,
@@ -204,6 +209,9 @@ def chat_with_qwen_vllm(
 
 
 # 简化版本：假设answer_list中存储的就是正确答案文本（选择题）或列表（非选择题）
+# ---------------------------------------------------------------------------
+# Standalone evaluation CLI
+# ---------------------------------------------------------------------------
 def calculate_final_score_simple(pred_answer, answer, pred_answer_list=None, answer_list=None, choice_mode=False):
     """
     简化版本，假设answer_list中存储的就是正确答案

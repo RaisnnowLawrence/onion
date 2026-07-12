@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+# ---------------------------------------------------------------------------
+# Text and mask aggregation
+# ---------------------------------------------------------------------------
 def clean_string_basic(text):
     """
     只保留字母和数字,去除所有空格、符号等
@@ -339,6 +342,9 @@ def combine_masks_simple(masks, mode="union"):
     return combined
 
 # 方案1：基于距离场的渐变效果（改为白色背景）
+# ---------------------------------------------------------------------------
+# Region isolation
+# ---------------------------------------------------------------------------
 def isolate_masked_regions_with_gradient(image_pil, masks, scores=None, max_distance=300, falloff_type='linear'):
     """
     改造版本：mask区域保留原图颜色，离mask越远颜色越淡（基于距离场）
@@ -597,6 +603,9 @@ def isolate_masked_regions_pil_fast(image_pil, masks, scores=None, alpha=0.5):
     }
 
 # mask变为彩色蒙版加到图像上
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
 def visualize_masks_on_image_pil_fast(image_pil, masks, scores=None, alpha=0.5):
     """
     专门优化用于PIL Image输入的mask可视化函数
@@ -884,6 +893,9 @@ def visualize_with_boxes_and_masks_fast(image_pil, boxes, masks, scores=None,
 
 
 
+# ---------------------------------------------------------------------------
+# LangSAM result adapters
+# ---------------------------------------------------------------------------
 def process_langsam_results_to_visualization(langsam_results, images_pil):
     """
     处理LangSAM结果并生成可视化

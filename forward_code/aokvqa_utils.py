@@ -8,8 +8,12 @@ import os
 import zipfile
 
 import numpy as np
+from PIL import Image
 
 
+# ---------------------------------------------------------------------------
+# Shared dataset helpers
+# ---------------------------------------------------------------------------
 def _empty_train_context(dataset):
     dataset.traincontext_caption_dict = {}
     dataset.traincontext_answer_dict = {}
@@ -82,6 +86,9 @@ def bounding_box_matching(box1, box2):
     return intersection / union
 
 
+# ---------------------------------------------------------------------------
+# COCO-based VQA datasets
+# ---------------------------------------------------------------------------
 class aokvqa_dataset:
 
     def __init__(self, args):
@@ -567,6 +574,9 @@ class vqav2_dataset(okvqa_dataset):
         self.train_idx = {str(idx): key for idx, key in enumerate(getattr(self, "train_keys", []))}
 
 
+# ---------------------------------------------------------------------------
+# GQA
+# ---------------------------------------------------------------------------
 def _gqa_question_member(split_name):
     split_map = {
         "val": "val_balanced_questions.json",
@@ -672,6 +682,9 @@ class gqa_dataset(aokvqa_dataset):
         return self.image_path_dict[int(img_key) if str(img_key).isdigit() else img_key]
 
 
+# ---------------------------------------------------------------------------
+# TextVQA
+# ---------------------------------------------------------------------------
 def _load_textvqa_ocr(args):
     ocr_path = os.path.join(args.coco_path, f"TextVQA_Rosetta_OCR_v0.2_{args.split_name}.json")
     if not os.path.isfile(ocr_path):
@@ -760,6 +773,9 @@ class textvqa_dataset(aokvqa_dataset):
         return self.image_path_dict[int(img_key)]
 
 
+# ---------------------------------------------------------------------------
+# Generic file-backed VQA datasets
+# ---------------------------------------------------------------------------
 def _find_first_existing(paths):
     for path in paths:
         if os.path.isfile(path):
@@ -894,6 +910,9 @@ class mmstar_dataset(generic_file_vqa_dataset):
     generic_dataset_name = "mmstar"
 
 
+# ---------------------------------------------------------------------------
+# Binary hallucination benchmarks
+# ---------------------------------------------------------------------------
 class pope_dataset(aokvqa_dataset):
     """POPE yes/no hallucination benchmark loader.
 
@@ -974,6 +993,9 @@ class pope_dataset(aokvqa_dataset):
         return candidates[0]
 
 
+# ---------------------------------------------------------------------------
+# MME and HallusionBench
+# ---------------------------------------------------------------------------
 def load_mme_parquet_records(args, save_images=False):
     """Load MME parquet records and optionally materialize embedded images."""
     manifest_file = getattr(args, "mme_manifest_file", "")
@@ -1255,6 +1277,9 @@ class hallusionbench_dataset(aokvqa_dataset):
     def find_image_path(self, img_key):
         return self.image_path_dict[int(img_key)]
 
+# ---------------------------------------------------------------------------
+# Legacy A-OKVQA compatibility loaders
+# ---------------------------------------------------------------------------
 # 根据图片id加载图片
 def find_image(args, img_key):
     split = args.split_name

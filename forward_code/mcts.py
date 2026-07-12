@@ -20,6 +20,9 @@ from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm
 from sam_utils import combine_masks_max_simple, process_langsam_results_to_visualization
 
 
+# ---------------------------------------------------------------------------
+# Base sample and tree node types
+# ---------------------------------------------------------------------------
 class QuestionSample(ABC):
 
     def __init__(self, row, args, round_idx=0):
@@ -131,6 +134,9 @@ class MCTSNode:
 
 
 # ====================== MCTS策略样本类（同步版） ======================
+# ---------------------------------------------------------------------------
+# Onion visual-action MCTS implementation
+# ---------------------------------------------------------------------------
 class MCTSQuestionSample(QuestionSample):
     def __init__(self, row, args, round_idx=0, llm_model=None, llm_processor=None, sam_model=None,
                  clip_model=None, clip_processor=None, use_vllm=False, vllm_client=None, vllm_model_name=None):
