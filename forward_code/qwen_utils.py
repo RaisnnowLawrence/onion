@@ -289,7 +289,7 @@ def main():
     model, processor, tokenizer = initialize_qwen('qwen3-VL-8B')
 
     # 准备数据
-    from aokvqa_utils import load_aokvqa_dataset_v1, find_image_path
+    from dataset_utils import find_image_path, load_aokvqa_dataset_v1
     val_keys, args.raw_image_dir, answer_dict, question_dict, _, choices_dict, = load_aokvqa_dataset_v1(args)
 
     # 创建结果字典

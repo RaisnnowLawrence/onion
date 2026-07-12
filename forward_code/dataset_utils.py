@@ -1,4 +1,4 @@
-"""Dataset adapters and annotation loaders used by Onion experiments."""
+"""Dataset adapters, registries, path resolution, and runtime policies."""
 
 import csv
 import glob

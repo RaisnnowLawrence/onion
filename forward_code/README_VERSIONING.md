@@ -4,7 +4,7 @@ This repository tracks the local forward-code variant used for A-OKVQA/Qwen3-VL-
 
 Tracked files include:
 
-- Python source files such as `onion.py`, `mcts.py`, `aokvqa_utils.py`, `qwen_utils.py`, and `sam_utils.py`
+- Python source files such as `onion.py`, `mcts.py`, `dataset_utils.py`, `qwen_utils.py`, and `sam_utils.py`
 - Small experiment launch scripts in this directory
 - `.gitignore` and versioning notes
 

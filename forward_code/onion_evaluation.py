@@ -6,7 +6,7 @@ import json
 import os
 import re
 
-from aokvqa_utils import (
+from dataset_utils import (
     load_generic_vqa_answer_annotations,
     load_gqa_answer_annotations,
     load_hallusionbench_answer_annotations,
