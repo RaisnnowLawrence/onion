@@ -1,19 +1,24 @@
+"""Monte Carlo tree search and visual action primitives for Onion."""
+
 from abc import ABC, abstractmethod
-import shortuuid    # 生成唯一ID
-import base64       # 图片base64编解码
-import io           # 内存二进制流处理
-from PIL import Image  # 图片处理
-import numpy as np     # 数值计算
-import random          # 随机选择
-import math            # 数学计算（UCB公式）
-import traceback       # 异常堆栈打印
-import re              # 正则表达式，提取问题中的物体
-import tempfile        # 临时文件处理
-import os              # 文件路径操作
-import torch           # 深度学习框架
+import base64
+import io
+import math
+import os
+import random
+import re
+import tempfile
+import traceback
+
 import cv2
-from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm, string_to_list_if_possible  # Qwen VL模型调用
-from sam_utils import process_langsam_results_to_visualization, combine_masks_max_simple  # SAM可视化
+import numpy as np
+import shortuuid
+import torch
+from PIL import Image
+
+from qwen_utils import chat_with_qwen_vl, chat_with_qwen_vllm
+from sam_utils import combine_masks_max_simple, process_langsam_results_to_visualization
+
 
 class QuestionSample(ABC):
 

@@ -1,8 +1,20 @@
+"""Qwen-VL model initialization, chat adapters, and standalone evaluation."""
+
 import argparse
-import torch
-import base64
-from tqdm import tqdm
 import ast
+import base64
+import json
+
+import torch
+from tqdm import tqdm
+
+
+QWEN_MODEL_PATHS = {
+    "qwen3-VL-2B": "/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-2B-Instruct",
+    "qwen3-VL-4B": "/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-4B-Instruct",
+    "qwen3-VL-8B": "/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-8B-Instruct",
+    "qwen3-VL-30B": "/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-30B-A3B-Instruct",
+}
 
 # qwen输出是字符串,所以这是一个配套解决输出的函数
 def string_to_list_if_possible(s):
@@ -24,18 +36,14 @@ def string_to_list_if_possible(s):
 # print(string_to_list_if_possible("{'key': 1}")) # 输出: "{'key': 1}" (字典，不转换)
 
 def initialize_qwen(model_name):
+    try:
+        qwen_path = QWEN_MODEL_PATHS[model_name]
+    except KeyError as exc:
+        supported = ", ".join(QWEN_MODEL_PATHS)
+        raise ValueError(f"Unsupported Qwen model {model_name!r}; choose one of: {supported}") from exc
 
-    from modelscope import Qwen3VLForConditionalGeneration, AutoProcessor
+    from modelscope import AutoProcessor, Qwen3VLForConditionalGeneration
     from transformers import AutoTokenizer
-
-    if model_name == "qwen3-VL-2B":
-        qwen_path="/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-2B-Instruct"
-    elif model_name == "qwen3-VL-4B":
-        qwen_path="/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-4B-Instruct"
-    elif model_name == "qwen3-VL-8B":
-        qwen_path="/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-8B-Instruct"
-    elif model_name == "qwen3-VL-30B":
-        qwen_path="/data2/lizhengxue/WorkSpace/huchunning/Model-Database/Qwen/Qwen3-VL-30B-A3B-Instruct"
 
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         qwen_path, 
@@ -356,13 +364,11 @@ def main():
         
         # 每十个样本保存一次
         if (idx + 1) % 10 == 0:
-            import json
             with open('qwen_vl_results.json', 'w') as f:
                 json.dump(results_dict, f, indent=2)
             print(f"Saved results for {idx + 1} samples")
     
     # 最终保存所有结果
-    import json
     with open('qwen_vl_results_final.json', 'w') as f:
         json.dump(results_dict, f, indent=2)
     print(f"Final results saved. Total samples: {len(results_dict)}")

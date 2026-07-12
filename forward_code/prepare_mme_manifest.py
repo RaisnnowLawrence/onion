@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""Materialize MME parquet images and write an Onion-compatible manifest."""
+
 import argparse
 import glob
 import json

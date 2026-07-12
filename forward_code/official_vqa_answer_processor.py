@@ -1,3 +1,5 @@
+"""Official VQA answer normalization shared by inference and evaluation."""
+
 import re
 
 
@@ -204,4 +206,3 @@ _PROCESSOR = OfficialVQAAnswerProcessor()
 
 def normalize_vqa_answer(answer):
     return _PROCESSOR(answer)
-

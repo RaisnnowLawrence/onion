@@ -1,24 +1,13 @@
-import os
+"""Dataset adapters and annotation loaders used by Onion experiments."""
+
 import csv
-import argparse
-import numpy as np
-import multiprocessing
-import json
-import time
-import torch
-import random
-import openai
-from tqdm import tqdm
-from transformers import GPT2Tokenizer
-import pdb
-import pickle
 import glob
 import io
+import json
+import os
 import zipfile
-from transformers import CLIPProcessor, CLIPModel
-from transformers import CLIPTokenizer, CLIPTextModel
-from PIL import Image
-import datetime
+
+import numpy as np
 
 
 def _empty_train_context(dataset):
