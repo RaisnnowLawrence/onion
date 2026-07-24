@@ -141,6 +141,23 @@ def parser_args():
                         help='semantic scatter expansion scale')
     parser.add_argument('--dyfo_focus_padding', type=float, default=1.2,
                         help='padding scale around localized focus boxes')
+    parser.add_argument('--dyfo_dual_visual_experts', action='store_true',
+                        help='use GroundingDINO/LangSAM and OWLv2 to classify confirmed and suspicious target regions')
+    parser.add_argument('--dyfo_owlv2_model_path', type=str,
+                        default='/data2/lizhengxue/WorkSpace/PreTrainModel/owlv2/owlv2-large-patch14-ensemble',
+                        help='local OWLv2 model used by the optional second visual expert')
+    parser.add_argument('--dyfo_owlv2_threshold', type=float, default=0.10,
+                        help='minimum OWLv2 box confidence')
+    parser.add_argument('--dyfo_dual_iou_threshold', type=float, default=0.60,
+                        help='base IoU threshold for matching GroundingDINO and OWLv2 boxes')
+    parser.add_argument('--dyfo_dual_iou_delta', type=float, default=0.10,
+                        help='dynamic IoU adjustment used by glance-versus-stare conflict routing')
+    parser.add_argument('--dyfo_dual_conflict_low', type=float, default=0.50,
+                        help='conflict rate below which dual-expert matching uses a looser IoU threshold')
+    parser.add_argument('--dyfo_dual_conflict_high', type=float, default=0.70,
+                        help='conflict rate above which dual-expert matching uses a stricter IoU threshold')
+    parser.add_argument('--dyfo_dual_max_boxes_per_target', type=int, default=3,
+                        help='maximum boxes retained from each visual expert for one target')
     parser.add_argument('--dyfo_area_reward', type=str, default='compact',
                         choices=['compact', 'paper'],
                         help='kept for compatibility; DyFo reward now hard-gates target retention and uses 1 - area_ratio')
@@ -151,9 +168,37 @@ def parser_args():
     parser.add_argument('--dyfo_answer_image_mode', type=str, default='crop',
                         choices=['crop', 'resized_crop', 'concat_horizontal', 'concat_vertical'],
                         help='image passed to final MLLM when --dyfo_use_focus_image_as_answer is set: best crop, resized crop, or original plus resized focus crop')
+    parser.add_argument('--dyfo_node_answer_image_mode', type=str, default='concat_horizontal',
+                        choices=['crop', 'resized_crop', 'concat_horizontal', 'concat_vertical', 'active_look_horizontal'],
+                        help='image used by each DyFo focus node when producing its local answer')
     parser.add_argument('--dyfo_decision_mode', type=str, default='evidence_inject',
-                        choices=['evidence_inject', 'best_focus_answer', 'weighted_vote'],
-                        help='DyFo final decision: inject evidence into the normal answer path, answer from the best focus node, or reward-weighted vote over focus nodes')
+                        choices=['evidence_inject', 'best_focus_answer', 'weighted_vote', 'conservative_override', 'token_confidence_override', 'node_confidence_override', 'clip_statement_override'],
+                        help='DyFo final decision: inject evidence, use best focus, weighted vote, token confidence, or CLIP statement support')
+    parser.add_argument('--dyfo_force_run_all_samples', action='store_true',
+                        help='run DyFo for every sample even when the ONION instruction did not select image enhancement')
+    parser.add_argument('--dyfo_override_confidence_threshold', type=float, default=95.0,
+                        help='minimum 0-100 arbiter confidence required to replace the pure MLLM baseline')
+    parser.add_argument('--dyfo_override_required_strength', type=str, default='extreme',
+                        choices=['strong', 'extreme'],
+                        help='minimum evidence-strength label required for conservative DyFo override')
+    parser.add_argument('--dyfo_override_max_tokens', type=int, default=160,
+                        help='max tokens for the conservative baseline-vs-DyFo arbiter')
+    parser.add_argument('--dyfo_token_confidence_threshold', type=float, default=0.95,
+                        help='minimum exp(mean(answer-token logprob)) required for a DyFo override')
+    parser.add_argument('--dyfo_token_confidence_margin', type=float, default=0.0,
+                        help='minimum DyFo minus pure answer-token confidence required for an override')
+    parser.add_argument('--dyfo_node_confidence_threshold', type=float, default=0.80,
+                        help='minimum weighted node-token confidence required to replace the pure answer')
+    parser.add_argument('--dyfo_node_confidence_margin', type=float, default=0.10,
+                        help='minimum weighted node confidence minus pure confidence required for replacement')
+    parser.add_argument('--dyfo_node_confidence_support_ratio', type=float, default=0.60,
+                        help='minimum fraction of valid node vote weight supporting the DyFo candidate')
+    parser.add_argument('--dyfo_node_confidence_min_support', type=int, default=2,
+                        help='minimum number of valid focus nodes supporting the DyFo candidate')
+    parser.add_argument('--dyfo_clip_statement_margin', type=float, default=0.0,
+                        help='minimum CLIP cosine margin favoring the DyFo statement')
+    parser.add_argument('--dyfo_clip_statement_focus_gain', type=float, default=0.0,
+                        help='minimum crop-vs-original gain in CLIP preference for the DyFo statement')
     parser.add_argument('--dyfo_focus_max_tokens', type=int, default=32,
                         help='max tokens for textual focus generation')
     parser.add_argument('--dyfo_answer_max_tokens', type=int, default=32,
@@ -162,6 +207,14 @@ def parser_args():
                         help='max tokens for final DyFo visual evidence generation')
     parser.add_argument('--dyfo_evidence_context_max_chars', type=int, default=700,
                         help='max characters of DyFo visual evidence injected into answer context')
+    parser.add_argument('--dyfo_region_audit', action='store_true',
+                        help='persist node-level region diagnostics and run a best-region occlusion counterfactual')
+    parser.add_argument('--dyfo_region_audit_save_crops', action='store_true',
+                        help='save every non-root DyFo node crop for manual region inspection')
+    parser.add_argument('--dyfo_region_audit_unique_iou', type=float, default=0.90,
+                        help='IoU threshold used to count near-duplicate node regions in region-audit mode')
+    parser.add_argument('--dyfo_region_audit_dir', type=str, default='',
+                        help='optional persistent asset directory for DyFo region-audit crops')
     parser.add_argument('--use_all_regional_captions', action='store_true',
                         help='inject top regional captions instead of selecting a few objects over multiple rounds')
     parser.add_argument('--max_regional_captions', type=int, default=25,

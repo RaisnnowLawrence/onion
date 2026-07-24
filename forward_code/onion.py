@@ -24,10 +24,17 @@ from collections import Counter, defaultdict
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 from modelscope import Qwen3VLForConditionalGeneration, AutoProcessor
 from tqdm import tqdm
-from transformers import AutoTokenizer, CLIPModel, CLIPProcessor, CLIPTextModel
+from transformers import (
+    AutoTokenizer,
+    CLIPModel,
+    CLIPProcessor,
+    CLIPTextModel,
+    Owlv2ForObjectDetection,
+    Owlv2Processor,
+)
 
 from lang_sam import LangSAM
 
@@ -86,6 +93,8 @@ class Onion:
         # 图像处理部分按需初始化。Direct/非视觉增强实验不需要加载
         # GroundingDINO + SAM，否则多 shard 同时启动时容易产生很高的显存峰值。
         self.sam = None
+        self.owlv2_model = None
+        self.owlv2_processor = None
 
         self.caption_qwen = self.load_caption_qwen()
 
@@ -103,7 +112,13 @@ class Onion:
         # MCTS图像增强所需：加载完整CLIPModel（视觉+文本）用于reward计算
         self.clip_full_model = None
         self.clip_full_processor = None
-        if args.use_image_enhance and getattr(args, "mcts_action_mode", "all") != "dyfo_evidence":
+        if (
+            args.use_image_enhance
+            and (
+                getattr(args, "mcts_action_mode", "all") != "dyfo_evidence"
+                or getattr(args, "dyfo_decision_mode", "") == "clip_statement_override"
+            )
+        ):
             self.clip_full_model = CLIPModel.from_pretrained("/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-model/clip-vit-base-patch16")
             self.clip_full_model = self.clip_full_model.cuda()
             self.clip_full_processor = CLIPProcessor.from_pretrained("/data2/lizhengxue/WorkSpace/huchunning/VisualCoT-model/clip-vit-base-patch16")
@@ -2582,8 +2597,14 @@ class Onion:
             knowledge_triggered = question_type in ("knowledge", "category")
         
         # ========== 三个核心增强模块（由args控制开关） ==========
-        if effective_use_image_enhance and onion_instruction[0] == 'image':
+        dyfo_force_run = (
+            self.args.mcts_action_mode == "dyfo_evidence"
+            and getattr(self.args, "dyfo_force_run_all_samples", False)
+        )
+        if effective_use_image_enhance and (onion_instruction[0] == 'image' or dyfo_force_run):
             if self.args.mcts_action_mode == "dyfo_evidence":
+                if dyfo_force_run and onion_instruction[0] != 'image':
+                    print("[dyfo] force-run enabled; overriding ONION instruction '%s'" % onion_instruction[0])
                 dyfo_result = self._run_dyfo_visual_evidence_search(data_row, onion_instruction[1], attr_list)
                 dyfo_visual_evidence = dyfo_result.get("evidence", "")
                 dyfo_focus_image_path = dyfo_result.get("focus_image_path")
@@ -3421,7 +3442,7 @@ class Onion:
         pred_candidates = [self._postprocess_answer(candidate) for candidate in pred_candidates]
         if (
             self.args.mcts_action_mode == "dyfo_evidence"
-            and self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote")
+            and self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote", "conservative_override", "token_confidence_override", "node_confidence_override", "clip_statement_override")
             and dyfo_final_answer
             and (
                 self.args.cot_style != "rag_strategy_router"
@@ -3837,6 +3858,230 @@ class Onion:
             int(np.max(boxes[:, 3])),
         )
 
+    def _dyfo_langsam_detect_boxes(self, image_pil, target):
+        if image_pil.mode != "RGB":
+            image_pil = image_pil.convert("RGB")
+        try:
+            self.ensure_lang_sam()
+            with torch.no_grad():
+                results = self.sam.predict([image_pil], [target])
+        except Exception as exc:
+            print("[dyfo dual] GroundingDINO failed target=%s error=%s" % (target, exc))
+            return []
+        if not results:
+            return []
+        result = results[0]
+        raw_boxes = result.get("boxes", [])
+        raw_scores = result.get("scores", [])
+        detections = []
+        for idx, raw_box in enumerate(raw_boxes):
+            box = tuple(int(round(float(value))) for value in raw_box)
+            if len(box) != 4 or box[2] <= box[0] or box[3] <= box[1]:
+                continue
+            score = float(raw_scores[idx]) if idx < len(raw_scores) else 0.0
+            detections.append({"box": box, "score": score, "expert": "grounding_dino"})
+        detections.sort(key=lambda item: item["score"], reverse=True)
+        return detections[:max(1, getattr(self.args, "dyfo_dual_max_boxes_per_target", 3))]
+
+    def initialize_owlv2(self):
+        model_path = getattr(self.args, "dyfo_owlv2_model_path", "")
+        if not model_path:
+            raise ValueError("--dyfo_owlv2_model_path is required for dual visual experts")
+        self.owlv2_processor = Owlv2Processor.from_pretrained(model_path, local_files_only=True)
+        self.owlv2_model = Owlv2ForObjectDetection.from_pretrained(
+            model_path,
+            local_files_only=True,
+            torch_dtype=torch.float16,
+        ).cuda().eval()
+        print("[dyfo dual] loaded OWLv2 from %s" % model_path)
+
+    def ensure_owlv2(self):
+        if self.owlv2_model is None or self.owlv2_processor is None:
+            self.initialize_owlv2()
+
+    def _dyfo_owlv2_detect_targets(self, image_pil, targets):
+        targets = self._dyfo_unique_targets(targets)
+        detections = {target: [] for target in targets}
+        if not targets:
+            return detections
+        try:
+            self.ensure_owlv2()
+            inputs = self.owlv2_processor(text=[targets], images=[image_pil], return_tensors="pt")
+            model_device = next(self.owlv2_model.parameters()).device
+            model_dtype = next(self.owlv2_model.parameters()).dtype
+            inputs = {
+                key: value.to(model_device, dtype=model_dtype) if value.is_floating_point() else value.to(model_device)
+                for key, value in inputs.items()
+            }
+            with torch.no_grad():
+                outputs = self.owlv2_model(**inputs)
+            target_sizes = torch.tensor([image_pil.size[::-1]], device=model_device)
+            processed = self.owlv2_processor.post_process_grounded_object_detection(
+                outputs,
+                threshold=float(getattr(self.args, "dyfo_owlv2_threshold", 0.10)),
+                target_sizes=target_sizes,
+                text_labels=[targets],
+            )[0]
+            boxes = processed.get("boxes", []).detach().float().cpu().tolist()
+            scores = processed.get("scores", []).detach().float().cpu().tolist()
+            labels = processed.get("text_labels", [])
+            if not labels:
+                label_ids = processed.get("labels", []).detach().cpu().tolist()
+                labels = [targets[int(idx)] for idx in label_ids]
+            for raw_box, score, label in zip(boxes, scores, labels):
+                target = str(label)
+                if target not in detections:
+                    continue
+                box = tuple(int(round(float(value))) for value in raw_box)
+                if box[2] <= box[0] or box[3] <= box[1]:
+                    continue
+                detections[target].append({"box": box, "score": float(score), "expert": "owlv2"})
+        except Exception as exc:
+            print("[dyfo dual] OWLv2 failed targets=%s error=%s" % (targets, exc))
+            return detections
+        max_boxes = max(1, getattr(self.args, "dyfo_dual_max_boxes_per_target", 3))
+        for target in targets:
+            detections[target].sort(key=lambda item: item["score"], reverse=True)
+            detections[target] = detections[target][:max_boxes]
+        return detections
+
+    def _dyfo_box_iou(self, box_a, box_b):
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+        area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+        union = area_a + area_b - intersection
+        return float(intersection) / float(union) if union > 0 else 0.0
+
+    def _dyfo_match_expert_boxes(self, boxes_a, boxes_b, iou_threshold):
+        candidates = []
+        for idx_a, detection_a in enumerate(boxes_a):
+            for idx_b, detection_b in enumerate(boxes_b):
+                iou = self._dyfo_box_iou(detection_a["box"], detection_b["box"])
+                if iou >= iou_threshold:
+                    candidates.append((iou, idx_a, idx_b))
+        candidates.sort(reverse=True)
+        used_a, used_b, matches = set(), set(), []
+        for iou, idx_a, idx_b in candidates:
+            if idx_a in used_a or idx_b in used_b:
+                continue
+            used_a.add(idx_a)
+            used_b.add(idx_b)
+            matches.append({"grounding_dino": boxes_a[idx_a], "owlv2": boxes_b[idx_b], "iou": iou})
+        unmatched_a = [item for idx, item in enumerate(boxes_a) if idx not in used_a]
+        unmatched_b = [item for idx, item in enumerate(boxes_b) if idx not in used_b]
+        return matches, unmatched_a, unmatched_b
+
+    def _dyfo_dual_expert_locate_required_targets(self, image_pil, required_targets):
+        required_targets = self._dyfo_unique_targets(required_targets)
+        owlv2_by_target = self._dyfo_owlv2_detect_targets(image_pil, required_targets)
+        gdino_by_target = {
+            target: self._dyfo_langsam_detect_boxes(image_pil, target)
+            for target in required_targets
+        }
+        base_iou = float(getattr(self.args, "dyfo_dual_iou_threshold", 0.60))
+        delta = float(getattr(self.args, "dyfo_dual_iou_delta", 0.10))
+        initial_confirmed = 0
+        initial_suspicious = 0
+        for target in required_targets:
+            matches, unmatched_a, unmatched_b = self._dyfo_match_expert_boxes(
+                gdino_by_target[target], owlv2_by_target[target], base_iou
+            )
+            initial_confirmed += len(matches)
+            initial_suspicious += len(unmatched_a) + len(unmatched_b)
+        denominator = initial_confirmed + initial_suspicious
+        conflict_rate = float(initial_suspicious) / denominator if denominator else 1.0
+        low = float(getattr(self.args, "dyfo_dual_conflict_low", 0.50))
+        high = float(getattr(self.args, "dyfo_dual_conflict_high", 0.70))
+        if conflict_rate < low:
+            effective_iou = max(0.0, base_iou - delta)
+            look_mode = "glance"
+        elif conflict_rate > high:
+            effective_iou = min(1.0, base_iou + delta)
+            look_mode = "stare"
+        else:
+            effective_iou = base_iou
+            look_mode = "balanced"
+
+        confirmed, suspicious = [], []
+        target_boxes, support_boxes, missing_targets = {}, [], []
+        for target in required_targets:
+            boxes_a = gdino_by_target[target]
+            boxes_b = owlv2_by_target[target]
+            matches, unmatched_a, unmatched_b = self._dyfo_match_expert_boxes(
+                boxes_a, boxes_b, effective_iou
+            )
+            target_support = []
+            for match in matches:
+                union_box = self._dyfo_union_boxes(
+                    [match["grounding_dino"]["box"], match["owlv2"]["box"]],
+                    image_pil.size,
+                    1.0,
+                )
+                item = {"target": target, "box": union_box, **match}
+                confirmed.append(item)
+                target_support.append(union_box)
+            for detection in unmatched_a + unmatched_b:
+                item = {"target": target, **detection}
+                suspicious.append(item)
+                target_support.append(detection["box"])
+            if target_support:
+                target_boxes[target] = self._dyfo_union_boxes(target_support, image_pil.size, 1.0)
+                support_boxes.extend(target_support)
+            else:
+                missing_targets.append(target)
+
+        union_box = self._dyfo_union_boxes(
+            support_boxes,
+            image_pil.size,
+            getattr(self.args, "dyfo_focus_padding", 1.2),
+        )
+        agreement_denominator = len(confirmed) + len(suspicious)
+        agreement_score = (
+            float(len(confirmed)) / agreement_denominator if agreement_denominator else 0.0
+        )
+        result = {
+            "required_targets": required_targets,
+            "target_boxes": target_boxes,
+            "missing_targets": missing_targets,
+            "all_targets_located": bool(required_targets) and not missing_targets,
+            "support_boxes": support_boxes,
+            "joined_box": None,
+            "union_box": union_box,
+            "query_log": [],
+            "grounding_dino": gdino_by_target,
+            "owlv2": owlv2_by_target,
+            "confirmed_regions": confirmed,
+            "suspicious_regions": suspicious,
+            "conflict_rate": conflict_rate,
+            "agreement_score": agreement_score,
+            "base_iou_threshold": base_iou,
+            "effective_iou_threshold": effective_iou,
+            "look_mode": look_mode,
+        }
+        print(
+            "[dyfo dual] mode=%s conflict=%.3f iou=%.3f confirmed=%d suspicious=%d missing=%s"
+            % (look_mode, conflict_rate, effective_iou, len(confirmed), len(suspicious), missing_targets)
+        )
+        return result
+
+    def _dyfo_build_active_look_highlight(self, original, dual_result):
+        highlighted = original.copy().convert("RGB")
+        draw = ImageDraw.Draw(highlighted)
+        line_width = max(2, int(round(min(original.size) / 180.0)))
+        for region in dual_result.get("confirmed_regions", []):
+            box = tuple(region["box"])
+            draw.rectangle(box, outline=(32, 190, 80), width=line_width)
+            draw.text((box[0] + 2, box[1] + 2), str(region["target"]), fill=(32, 190, 80))
+        for region in dual_result.get("suspicious_regions", []):
+            box = tuple(region["box"])
+            draw.rectangle(box, outline=(225, 45, 45), width=line_width)
+            draw.text((box[0] + 2, box[1] + 2), str(region["target"]), fill=(225, 45, 45))
+        return highlighted
+
     def _dyfo_locate_with_fallbacks(self, image_pil, focus_text, key_objects=None, selected_objects=None):
         key_objects = key_objects or []
         selected_objects = selected_objects or []
@@ -4203,44 +4448,190 @@ class Onion:
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
 
-    def _dyfo_answer_from_crop(self, crop, focus_text, question):
+    def _dyfo_answer_from_crop(self, crop, focus_text, question, original=None, highlight=None):
         temp_path = None
         try:
+            mode = getattr(self.args, "dyfo_node_answer_image_mode", "concat_horizontal")
+            if original is None:
+                mode = "crop"
+            if mode == "active_look_horizontal" and original is not None and highlight is not None:
+                resized_highlight = self._dyfo_resize_like_original(highlight, original)
+                resized_crop = self._dyfo_resize_like_original(crop, original)
+                answer_image = Image.new("RGB", (original.width * 3, original.height), "white")
+                answer_image.paste(original, (0, 0))
+                answer_image.paste(resized_highlight, (original.width, 0))
+                answer_image.paste(resized_crop, (original.width * 2, 0))
+                image_description = (
+                    "the original image on the left, a detector-agreement highlight in the middle "
+                    "(green confirmed, red suspicious), and the focused region on the right"
+                )
+            elif mode == "crop":
+                answer_image = crop
+                image_description = "the focused image region"
+            elif mode == "resized_crop":
+                answer_image = self._dyfo_resize_like_original(crop, original)
+                image_description = "the resized focused image region"
+            else:
+                resized_crop = self._dyfo_resize_like_original(crop, original)
+                if mode == "concat_vertical":
+                    answer_image = Image.new("RGB", (original.width, original.height * 2), "white")
+                    answer_image.paste(original, (0, 0))
+                    answer_image.paste(resized_crop, (0, original.height))
+                    image_description = "the original image on top and its focused region below"
+                else:
+                    answer_image = Image.new("RGB", (original.width * 2, original.height), "white")
+                    answer_image.paste(original, (0, 0))
+                    answer_image.paste(resized_crop, (original.width, 0))
+                    image_description = "the original image on the left and its focused region on the right"
             temp_path = os.path.join(
                 self.args.cache_path,
                 "dyfo_answer_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
             )
             os.makedirs(self.args.cache_path, exist_ok=True)
-            crop.save(temp_path)
+            answer_image.save(temp_path)
             if uses_yes_no_scoring(self.args):
                 prompt = (
-                    "Answer the visual question using this focused image region.\n"
-                    "Use the visual focus as a hint, but answer the original question.\n"
+                    "Answer the visual question using %s.\n"
+                    "Use the original image for global context and the focused region for detail.\n"
                     "Return only yes or no.\n"
                     "Question: %s\n"
                     "Visual focus: %s\n"
                     "Answer:"
-                ) % (question, focus_text)
+                ) % (image_description, question, focus_text)
             else:
                 prompt = (
-                    "Answer the visual question using this focused image region.\n"
-                    "Use the visual focus as a hint, but answer the original question.\n"
-                    "If the crop is insufficient, make the best concise answer from visible evidence.\n"
+                    "Answer the visual question using %s.\n"
+                    "Use the original image for global context and the focused region for detail.\n"
+                    "Treat the focused region as additional visual evidence, not as a separate scene.\n"
                     "Return only one word or a short phrase.\n"
                     "Question: %s\n"
                     "Visual focus: %s\n"
                     "Answer:"
-                ) % (question, focus_text)
-            response = self._call_llm(
+                ) % (image_description, question, focus_text)
+            response, confidence_details = self._call_llm_with_token_confidence(
                 prompt,
                 image_path=temp_path,
                 max_new_tokens=getattr(self.args, "dyfo_answer_max_tokens", 32),
             )
             answer = self._clean_short_answer(self._extract_answer_from_response(response))
-            return answer, response, prompt
+            return answer, response, prompt, confidence_details
         finally:
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
+
+    @staticmethod
+    def _dyfo_box_iou(box_a, box_b):
+        if not box_a or not box_b:
+            return 0.0
+        ax1, ay1, ax2, ay2 = [float(value) for value in box_a]
+        bx1, by1, bx2, by2 = [float(value) for value in box_b]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        intersection = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - intersection
+        return intersection / union if union > 0 else 0.0
+
+    def _dyfo_build_region_audit(self, key, question, image_path, original, nodes, best_node):
+        safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(key)).strip("_") or "sample"
+        audit_root = getattr(self.args, "dyfo_region_audit_dir", "") or os.path.join(
+            self.args.output_path, "region_audit_assets"
+        )
+        sample_dir = os.path.join(audit_root, safe_key)
+        save_crops = bool(getattr(self.args, "dyfo_region_audit_save_crops", False))
+        if save_crops:
+            os.makedirs(sample_dir, exist_ok=True)
+
+        node_index = {id(node): index for index, node in enumerate(nodes)}
+        node_records = []
+        focused_boxes = []
+        for index, node in enumerate(nodes):
+            crop_path = ""
+            if node.depth > 0:
+                focused_boxes.append(tuple(node.box))
+                if save_crops:
+                    action = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(node.action))
+                    crop_path = os.path.join(
+                        sample_dir, "node_%02d_depth%d_%s.jpg" % (index, node.depth, action)
+                    )
+                    self._dyfo_crop_for_node(original, node.box).save(crop_path, quality=95)
+            confidence = getattr(node, "local_answer_confidence", {}) or {}
+            node_records.append({
+                "index": index,
+                "parent_index": node_index.get(id(node.parent)) if node.parent is not None else None,
+                "depth": node.depth,
+                "action": node.action,
+                "focus": node.focus,
+                "box": node.box,
+                "area_ratio": node.area_ratio,
+                "reward": node.reward,
+                "visits": node.visits,
+                "all_targets_present": node.all_targets_present,
+                "missing_targets": node.missing_targets,
+                "visual_hit": node.visual_hit,
+                "local_answer": node.local_answer,
+                "local_answer_confidence": confidence.get("confidence", 0.0),
+                "crop_path": crop_path,
+                "is_best_node": node is best_node,
+            })
+
+        pairwise_ious = []
+        for left in range(len(focused_boxes)):
+            for right in range(left + 1, len(focused_boxes)):
+                pairwise_ious.append(self._dyfo_box_iou(focused_boxes[left], focused_boxes[right]))
+        unique_threshold = float(getattr(self.args, "dyfo_region_audit_unique_iou", 0.90))
+        representatives = []
+        for box in focused_boxes:
+            if not any(self._dyfo_box_iou(box, representative) >= unique_threshold for representative in representatives):
+                representatives.append(box)
+
+        masked_path = ""
+        masked_answer = ""
+        masked_response = ""
+        masked_confidence = {}
+        if best_node.depth > 0:
+            masked = original.copy()
+            x1, y1, x2, y2 = [int(value) for value in best_node.box]
+            masked.paste((127, 127, 127), (x1, y1, x2, y2))
+            if save_crops:
+                masked_path = os.path.join(sample_dir, "best_region_masked_original.jpg")
+            else:
+                os.makedirs(self.args.cache_path, exist_ok=True)
+                masked_path = os.path.join(
+                    self.args.cache_path,
+                    "dyfo_audit_masked_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9)),
+                )
+            masked.save(masked_path, quality=95)
+            masked_answer, masked_response, _, masked_confidence = self._dyfo_pure_baseline_answer(
+                question, masked_path
+            )
+            if not save_crops and os.path.exists(masked_path):
+                os.remove(masked_path)
+                masked_path = ""
+
+        return {
+            "sample_key": key,
+            "question": question,
+            "original_image_path": image_path,
+            "asset_dir": sample_dir if save_crops else "",
+            "node_answer_image_mode": getattr(self.args, "dyfo_node_answer_image_mode", "concat_horizontal"),
+            "node_count": len(nodes),
+            "focused_node_count": len(focused_boxes),
+            "unique_region_count": len(representatives),
+            "unique_region_iou_threshold": unique_threshold,
+            "pairwise_iou_mean": float(np.mean(pairwise_ious)) if pairwise_ious else 0.0,
+            "pairwise_iou_min": float(np.min(pairwise_ious)) if pairwise_ious else 0.0,
+            "pairwise_iou_max": float(np.max(pairwise_ious)) if pairwise_ious else 0.0,
+            "best_node_index": node_index.get(id(best_node), 0),
+            "best_box": best_node.box,
+            "best_crop_area_ratio": best_node.area_ratio,
+            "best_masked_image_path": masked_path,
+            "best_masked_answer": masked_answer,
+            "best_masked_response": masked_response,
+            "best_masked_confidence": masked_confidence,
+            "nodes": node_records,
+        }
 
     def _dyfo_node_reward(self, visual_hit, lmm_consistent, area_ratio, all_targets_present=True):
         if not all_targets_present:
@@ -4251,7 +4642,7 @@ class Onion:
         area_score = 1.0 - area_ratio
         return max(0.0, min(1.0, consistency * area_score))
 
-    def _dyfo_weighted_vote(self, nodes):
+    def _dyfo_weighted_vote(self, nodes, use_node_confidence=False):
         vote_scores = defaultdict(float)
         norm_to_answer = {}
         vote_items = []
@@ -4265,7 +4656,10 @@ class Onion:
             if not norm:
                 continue
             mean_value = node.value / max(1, node.visits)
-            weight = max(float(getattr(node, "reward", 0.0)), float(mean_value), 1e-6)
+            evidence_weight = max(float(getattr(node, "reward", 0.0)), float(mean_value), 1e-6)
+            confidence_details = getattr(node, "local_answer_confidence", {}) or {}
+            node_confidence = float(confidence_details.get("confidence", 0.0))
+            weight = evidence_weight * node_confidence if use_node_confidence else evidence_weight
             vote_scores[norm] += weight
             norm_to_answer.setdefault(norm, answer)
             vote_items.append({
@@ -4275,17 +4669,427 @@ class Onion:
                 "answer": answer,
                 "normalized_answer": norm,
                 "weight": weight,
+                "evidence_weight": evidence_weight,
+                "node_token_confidence": node_confidence,
+                "node_token_confidence_details": confidence_details,
                 "reward": node.reward,
                 "visits": node.visits,
             })
         if not vote_scores:
             return "", {"vote_scores": {}, "vote_items": vote_items}
         best_norm = max(vote_scores, key=vote_scores.get)
+        supporting_items = [item for item in vote_items if item["normalized_answer"] == best_norm]
+        support_evidence_weight = sum(item["evidence_weight"] for item in supporting_items)
+        total_evidence_weight = sum(item["evidence_weight"] for item in vote_items)
+        weighted_confidence_sum = sum(
+            item["node_token_confidence"] * item["evidence_weight"]
+            for item in supporting_items
+        )
+        candidate_confidence = (
+            weighted_confidence_sum / support_evidence_weight
+            if support_evidence_weight > 0 else 0.0
+        )
+        support_ratio = (
+            support_evidence_weight / total_evidence_weight
+            if total_evidence_weight > 0 else 0.0
+        )
         return norm_to_answer[best_norm], {
             "best_normalized_answer": best_norm,
             "vote_scores": dict(vote_scores),
             "vote_items": vote_items,
+            "node_confidence_weighted_vote": bool(use_node_confidence),
+            "dyfo_candidate_confidence": candidate_confidence,
+            "dyfo_candidate_support_ratio": support_ratio,
+            "dyfo_candidate_support_nodes": len(supporting_items),
         }
+
+    def _dyfo_node_confidence_override(self, baseline_answer, baseline_confidence,
+                                       dyfo_answer, decision_trace):
+        baseline_norm = normalize_vqa_answer(baseline_answer)
+        dyfo_norm = normalize_vqa_answer(dyfo_answer)
+        pure_confidence = float((baseline_confidence or {}).get("confidence", 0.0))
+        dyfo_confidence = float(decision_trace.get("dyfo_candidate_confidence", 0.0))
+        support_ratio = float(decision_trace.get("dyfo_candidate_support_ratio", 0.0))
+        support_nodes = int(decision_trace.get("dyfo_candidate_support_nodes", 0))
+        threshold = float(getattr(self.args, "dyfo_node_confidence_threshold", 0.80))
+        margin = float(getattr(self.args, "dyfo_node_confidence_margin", 0.10))
+        min_support_ratio = float(
+            getattr(self.args, "dyfo_node_confidence_support_ratio", 0.60)
+        )
+        min_support_nodes = int(getattr(self.args, "dyfo_node_confidence_min_support", 2))
+        answers_disagree = bool(
+            baseline_norm and dyfo_norm and baseline_norm != dyfo_norm
+        )
+        gates = {
+            "answers_disagree": answers_disagree,
+            "absolute_confidence": dyfo_confidence >= threshold,
+            "relative_confidence": dyfo_confidence >= pure_confidence + margin,
+            "support_ratio": support_ratio >= min_support_ratio,
+            "support_nodes": support_nodes >= min_support_nodes,
+            "valid_focus_crop": not decision_trace.get("final_crop_fallback_to_original", False),
+            "all_targets_present": bool(
+                decision_trace.get("best_all_targets_present", False)
+            ),
+        }
+        override = all(gates.values())
+        trace = {
+            "baseline_answer": baseline_answer,
+            "baseline_token_confidence": baseline_confidence,
+            "dyfo_candidate_answer": dyfo_answer,
+            "dyfo_candidate_confidence": dyfo_confidence,
+            "confidence_threshold": threshold,
+            "confidence_margin": margin,
+            "confidence_delta": dyfo_confidence - pure_confidence,
+            "support_ratio": support_ratio,
+            "minimum_support_ratio": min_support_ratio,
+            "support_nodes": support_nodes,
+            "minimum_support_nodes": min_support_nodes,
+            "gates": gates,
+            "override_applied": override,
+            "fallback_reason": "" if override else ",".join(
+                name for name, passed in gates.items() if not passed
+            ),
+        }
+        return (dyfo_answer if override else baseline_answer), trace
+
+    def _dyfo_pure_baseline_answer(self, question, image_path):
+        prompt = (
+            "Answer the visual question from the original image only. "
+            "Use a single word or short phrase and do not explain.\n"
+            "Question: %s\n"
+            "Final Answer:"
+        ) % question
+        response, confidence_details = self._call_llm_with_token_confidence(
+            prompt,
+            image_path=image_path,
+            max_new_tokens=getattr(self.args, "dyfo_answer_max_tokens", 32),
+        )
+        answer = self._clean_short_answer(self._extract_answer_from_response(response))
+        return answer, response, prompt, confidence_details
+
+    def _dyfo_token_confidence_override(self, question, answer_image_path, baseline_answer,
+                                        baseline_confidence, dyfo_answer, decision_trace):
+        baseline_norm = normalize_vqa_answer(baseline_answer)
+        dyfo_norm = normalize_vqa_answer(dyfo_answer)
+        base_trace = {
+            "baseline_answer": baseline_answer,
+            "baseline_token_confidence": baseline_confidence,
+            "dyfo_candidate_answer": dyfo_answer,
+            "answers_disagree": bool(baseline_norm and dyfo_norm and baseline_norm != dyfo_norm),
+            "verifier_called": False,
+            "override_applied": False,
+            "fallback_reason": "",
+        }
+        if not baseline_norm:
+            base_trace["fallback_reason"] = "empty_baseline"
+            return baseline_answer, base_trace
+        if not dyfo_norm:
+            base_trace["fallback_reason"] = "empty_dyfo_candidate"
+            return baseline_answer, base_trace
+        if baseline_norm == dyfo_norm:
+            base_trace["fallback_reason"] = "answers_agree"
+            return baseline_answer, base_trace
+        if decision_trace.get("final_crop_fallback_to_original"):
+            base_trace["fallback_reason"] = "dyfo_crop_fallback"
+            return baseline_answer, base_trace
+        if not decision_trace.get("best_all_targets_present", False):
+            base_trace["fallback_reason"] = "required_targets_missing"
+            return baseline_answer, base_trace
+        if not decision_trace.get("vote_items"):
+            base_trace["fallback_reason"] = "empty_vote"
+            return baseline_answer, base_trace
+
+        prompt = (
+            "Answer the visual question using the original view and the focused view. "
+            "Use a single word or short phrase and do not explain.\n"
+            "Question: %s\n"
+            "Final Answer:"
+        ) % question
+        response, confidence_details = self._call_llm_with_token_confidence(
+            prompt,
+            image_path=answer_image_path,
+            max_new_tokens=getattr(self.args, "dyfo_answer_max_tokens", 32),
+        )
+        verified_answer = self._clean_short_answer(self._extract_answer_from_response(response))
+        verified_norm = normalize_vqa_answer(verified_answer)
+        confidence = float(confidence_details.get("confidence", 0.0))
+        baseline_score = float((baseline_confidence or {}).get("confidence", 0.0))
+        threshold = float(getattr(self.args, "dyfo_token_confidence_threshold", 0.95))
+        margin = float(getattr(self.args, "dyfo_token_confidence_margin", 0.0))
+        override = (
+            verified_norm == dyfo_norm
+            and confidence >= threshold
+            and confidence - baseline_score >= margin
+        )
+        base_trace.update({
+            "verifier_called": True,
+            "verifier_prompt": prompt,
+            "verifier_response": response,
+            "verified_answer": verified_answer,
+            "verified_answer_matches_dyfo": verified_norm == dyfo_norm,
+            "dyfo_token_confidence": confidence_details,
+            "confidence_threshold": threshold,
+            "confidence_margin": margin,
+            "confidence_delta": confidence - baseline_score,
+            "override_applied": override,
+            "fallback_reason": "" if override else "token_confidence_gate_failed",
+        })
+        return (dyfo_answer if override else baseline_answer), base_trace
+
+    def _dyfo_parse_parallel_statements(self, response):
+        text = str(response).strip()
+        candidates = [text]
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match:
+            candidates.insert(0, match.group(0))
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except Exception:
+                continue
+            pure_statement = str(parsed.get("pure_statement", "")).strip()
+            dyfo_statement = str(parsed.get("dyfo_statement", "")).strip()
+            if pure_statement and dyfo_statement and pure_statement != dyfo_statement:
+                return pure_statement, dyfo_statement
+        return "", ""
+
+    def _dyfo_build_parallel_statements(self, question, baseline_answer, dyfo_answer):
+        prompt = (
+            "Rewrite the visual question and each candidate answer as a standalone declarative image caption.\n"
+            "The two captions must use the same sentence structure and differ only where the candidate answers differ.\n"
+            "Preserve the exact entities, attributes, counts, relations, and polarity. Do not decide which answer is correct.\n"
+            "Return exactly one JSON object with keys pure_statement and dyfo_statement.\n"
+            "Question: %s\n"
+            "Pure candidate: %s\n"
+            "DyFo candidate: %s"
+        ) % (question, baseline_answer, dyfo_answer)
+        response = self._call_llm(
+            prompt,
+            image_path=None,
+            max_new_tokens=96,
+            use_images=False,
+        )
+        pure_statement, dyfo_statement = self._dyfo_parse_parallel_statements(response)
+        return pure_statement, dyfo_statement, response, prompt
+
+    def _dyfo_clip_statement_scores(self, original, crop, statements):
+        if self.clip_full_model is None or self.clip_full_processor is None:
+            raise RuntimeError("CLIP full model is required for clip_statement_override")
+        text_inputs = self.clip_full_processor(
+            text=list(statements),
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77,
+        )
+        image_inputs = self.clip_full_processor(
+            images=[original, crop],
+            return_tensors="pt",
+        )
+        text_inputs = {key: value.to(self.clip_full_model.device) for key, value in text_inputs.items()}
+        image_inputs = {key: value.to(self.clip_full_model.device) for key, value in image_inputs.items()}
+        with torch.no_grad():
+            text_features = self.clip_full_model.get_text_features(**text_inputs)
+            image_features = self.clip_full_model.get_image_features(**image_inputs)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+            similarities = image_features @ text_features.T
+        scores = similarities.detach().float().cpu().tolist()
+        return {
+            "original_pure": scores[0][0],
+            "original_dyfo": scores[0][1],
+            "focus_pure": scores[1][0],
+            "focus_dyfo": scores[1][1],
+        }
+
+    def _dyfo_clip_statement_override(self, question, original, crop, baseline_answer,
+                                      dyfo_answer, decision_trace):
+        baseline_norm = normalize_vqa_answer(baseline_answer)
+        dyfo_norm = normalize_vqa_answer(dyfo_answer)
+        trace = {
+            "baseline_answer": baseline_answer,
+            "dyfo_candidate_answer": dyfo_answer,
+            "answers_disagree": bool(baseline_norm and dyfo_norm and baseline_norm != dyfo_norm),
+            "clip_called": False,
+            "override_applied": False,
+            "fallback_reason": "",
+        }
+        if not baseline_norm:
+            trace["fallback_reason"] = "empty_baseline"
+            return baseline_answer, trace
+        if not dyfo_norm:
+            trace["fallback_reason"] = "empty_dyfo_candidate"
+            return baseline_answer, trace
+        if baseline_norm == dyfo_norm:
+            trace["fallback_reason"] = "answers_agree"
+            return baseline_answer, trace
+        if decision_trace.get("final_crop_fallback_to_original"):
+            trace["fallback_reason"] = "dyfo_crop_fallback"
+            return baseline_answer, trace
+        if not decision_trace.get("best_all_targets_present", False):
+            trace["fallback_reason"] = "required_targets_missing"
+            return baseline_answer, trace
+        if not decision_trace.get("vote_items"):
+            trace["fallback_reason"] = "empty_vote"
+            return baseline_answer, trace
+
+        pure_statement, dyfo_statement, rewrite_response, rewrite_prompt = (
+            self._dyfo_build_parallel_statements(question, baseline_answer, dyfo_answer)
+        )
+        trace.update({
+            "statement_rewrite_prompt": rewrite_prompt,
+            "statement_rewrite_response": rewrite_response,
+            "pure_statement": pure_statement,
+            "dyfo_statement": dyfo_statement,
+        })
+        if not pure_statement or not dyfo_statement:
+            trace["fallback_reason"] = "statement_rewrite_failed"
+            return baseline_answer, trace
+
+        scores = self._dyfo_clip_statement_scores(
+            original,
+            crop,
+            [pure_statement, dyfo_statement],
+        )
+        original_margin = scores["original_dyfo"] - scores["original_pure"]
+        focus_margin = scores["focus_dyfo"] - scores["focus_pure"]
+        combined_margin = 0.5 * (original_margin + focus_margin)
+        focus_gain = focus_margin - original_margin
+        margin_threshold = float(getattr(self.args, "dyfo_clip_statement_margin", 0.0))
+        gain_threshold = float(getattr(self.args, "dyfo_clip_statement_focus_gain", 0.0))
+        override = (
+            focus_margin >= margin_threshold
+            and combined_margin >= margin_threshold
+            and focus_gain >= gain_threshold
+        )
+        trace.update({
+            "clip_called": True,
+            "clip_scores": scores,
+            "original_margin": original_margin,
+            "focus_margin": focus_margin,
+            "combined_margin": combined_margin,
+            "focus_gain": focus_gain,
+            "margin_threshold": margin_threshold,
+            "focus_gain_threshold": gain_threshold,
+            "override_applied": override,
+            "fallback_reason": "" if override else "clip_statement_gate_failed",
+        })
+        return (dyfo_answer if override else baseline_answer), trace
+
+    def _dyfo_parse_conservative_override(self, response, baseline_answer, dyfo_answer):
+        text = str(response).strip()
+        decision_match = re.search(
+            r"decision\s*:\s*(KEEP_BASELINE|OVERRIDE_WITH_DYFO)", text, flags=re.IGNORECASE
+        )
+        confidence_match = re.search(r"confidence\s*:\s*([0-9]+(?:\.[0-9]+)?)", text, flags=re.IGNORECASE)
+        strength_match = re.search(
+            r"evidence\s+strength\s*:\s*(WEAK|MODERATE|STRONG|EXTREME)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        answer_match = re.search(r"final\s+answer\s*:\s*(.+)", text, flags=re.IGNORECASE)
+
+        decision = decision_match.group(1).upper() if decision_match else "KEEP_BASELINE"
+        confidence = float(confidence_match.group(1)) if confidence_match else 0.0
+        strength = strength_match.group(1).lower() if strength_match else "unknown"
+        parsed_answer = self._clean_short_answer(answer_match.group(1)) if answer_match else ""
+        required_strength = getattr(self.args, "dyfo_override_required_strength", "extreme")
+        strength_rank = {"unknown": 0, "weak": 1, "moderate": 2, "strong": 3, "extreme": 4}
+        threshold = float(getattr(self.args, "dyfo_override_confidence_threshold", 95.0))
+        dyfo_norm = normalize_vqa_answer(dyfo_answer)
+        parsed_norm = normalize_vqa_answer(parsed_answer)
+        override = (
+            decision == "OVERRIDE_WITH_DYFO"
+            and confidence >= threshold
+            and strength_rank.get(strength, 0) >= strength_rank[required_strength]
+            and bool(dyfo_norm)
+            and parsed_norm == dyfo_norm
+        )
+        final_answer = dyfo_answer if override else baseline_answer
+        return final_answer, {
+            "parsed_decision": decision,
+            "parsed_confidence": confidence,
+            "parsed_evidence_strength": strength,
+            "parsed_final_answer": parsed_answer,
+            "confidence_threshold": threshold,
+            "required_evidence_strength": required_strength,
+            "override_applied": override,
+        }
+
+    def _dyfo_conservative_override(self, question, answer_image_path, baseline_answer, dyfo_answer,
+                                    evidence, decision_trace):
+        baseline_norm = normalize_vqa_answer(baseline_answer)
+        dyfo_norm = normalize_vqa_answer(dyfo_answer)
+        base_trace = {
+            "baseline_answer": baseline_answer,
+            "dyfo_candidate_answer": dyfo_answer,
+            "answers_disagree": bool(baseline_norm and dyfo_norm and baseline_norm != dyfo_norm),
+            "arbiter_called": False,
+            "override_applied": False,
+            "fallback_reason": "",
+        }
+        if not baseline_norm:
+            base_trace["fallback_reason"] = "empty_baseline"
+            return baseline_answer, base_trace
+        if not dyfo_norm:
+            base_trace["fallback_reason"] = "empty_dyfo_candidate"
+            return baseline_answer, base_trace
+        if baseline_norm == dyfo_norm:
+            base_trace["fallback_reason"] = "answers_agree"
+            return baseline_answer, base_trace
+        if decision_trace.get("final_crop_fallback_to_original"):
+            base_trace["fallback_reason"] = "dyfo_crop_fallback"
+            return baseline_answer, base_trace
+        if not decision_trace.get("best_all_targets_present", False):
+            base_trace["fallback_reason"] = "required_targets_missing"
+            return baseline_answer, base_trace
+        if not decision_trace.get("vote_items"):
+            base_trace["fallback_reason"] = "empty_vote"
+            return baseline_answer, base_trace
+
+        vote_scores = decision_trace.get("vote_scores", {})
+        prompt = (
+            "You are a highly conservative visual answer arbiter. The baseline answer was produced "
+            "from the original image. The DyFo answer was produced after searching and magnifying "
+            "visual evidence. Keep the baseline unless the provided image and DyFo evidence make the "
+            "baseline unmistakably wrong and the DyFo answer unmistakably correct. Ordinary confidence, "
+            "a plausible crop, or a detector hit is not enough. Override only with extreme, direct, "
+            "unambiguous visual evidence. If uncertain for any reason, keep the baseline.\n"
+            "The image contains the original view and the DyFo focused view.\n"
+            "Question: %s\n"
+            "Pure baseline answer: %s\n"
+            "DyFo candidate answer: %s\n"
+            "DyFo weighted vote scores: %s\n"
+            "DyFo evidence: %s\n"
+            "Output exactly these five lines:\n"
+            "Decision: KEEP_BASELINE or OVERRIDE_WITH_DYFO\n"
+            "Confidence: <integer 0-100>\n"
+            "Evidence Strength: WEAK, MODERATE, STRONG, or EXTREME\n"
+            "Reason: <one short sentence grounded in visible evidence>\n"
+            "Final Answer: <exactly the baseline answer or DyFo candidate answer>"
+        ) % (
+            question,
+            baseline_answer,
+            dyfo_answer,
+            json.dumps(vote_scores, ensure_ascii=False),
+            self._truncate_text(evidence, 700),
+        )
+        response = self._call_llm(
+            prompt,
+            image_path=answer_image_path,
+            max_new_tokens=getattr(self.args, "dyfo_override_max_tokens", 160),
+        )
+        final_answer, parse_trace = self._dyfo_parse_conservative_override(
+            response, baseline_answer, dyfo_answer
+        )
+        base_trace.update(parse_trace)
+        base_trace.update({
+            "arbiter_called": True,
+            "arbiter_prompt": prompt,
+            "arbiter_response": response,
+            "fallback_reason": "" if parse_trace["override_applied"] else "arbiter_kept_baseline",
+        })
+        return final_answer, base_trace
 
     def _run_dyfo_visual_evidence_search(self, data_row, obj_list, attr_list):
         key = data_row["key"]
@@ -4294,6 +5098,17 @@ class Onion:
         question_type = self._classify_vqa_question_type(question)
         if not self._dyfo_should_trigger(question, question_type):
             return {"evidence": "", "focus_image_path": None, "trace": "skipped_by_trigger"}
+
+        baseline_answer = ""
+        baseline_response = ""
+        baseline_prompt = ""
+        baseline_confidence = {}
+        if self.args.dyfo_decision_mode in ("conservative_override", "token_confidence_override", "node_confidence_override", "clip_statement_override"):
+            baseline_answer, baseline_response, baseline_prompt, baseline_confidence = self._dyfo_pure_baseline_answer(
+                question, image_path
+            )
+            print("[dyfo override] pure baseline answer:", baseline_answer)
+            print("[dyfo override] pure token confidence:", baseline_confidence.get("confidence", 0.0))
 
         free_key_objects, key_object_response = self.extract_key_objects_from_question(question)
         selected_objects = []
@@ -4330,9 +5145,16 @@ class Onion:
 
         original = Image.open(image_path).convert("RGB")
         image_area = max(1, original.width * original.height)
-        initial_required_locate = self._dyfo_locate_required_targets(
-            original, required_targets, allow_joined_query=True
-        ) if required_targets else {
+        if required_targets and getattr(self.args, "dyfo_dual_visual_experts", False):
+            initial_required_locate = self._dyfo_dual_expert_locate_required_targets(
+                original, required_targets
+            )
+        elif required_targets:
+            initial_required_locate = self._dyfo_locate_required_targets(
+                original, required_targets, allow_joined_query=True
+            )
+        else:
+            initial_required_locate = {
             "required_targets": [],
             "target_boxes": {},
             "missing_targets": [],
@@ -4342,6 +5164,11 @@ class Onion:
             "union_box": None,
             "query_log": [],
         }
+        active_look_highlight = None
+        if getattr(self.args, "dyfo_dual_visual_experts", False):
+            active_look_highlight = self._dyfo_build_active_look_highlight(
+                original, initial_required_locate
+            )
         initial_focus, initial_focus_response = self._dyfo_initial_focus(
             question, obj_list=selected_objects or obj_list, key_objects=free_key_objects
         )
@@ -4370,6 +5197,7 @@ class Onion:
                 self.local_answer = ""
                 self.local_answer_response = ""
                 self.local_answer_prompt = ""
+                self.local_answer_confidence = {}
                 self.langsam_query = ""
                 self.langsam_query_source = "root" if action == "root" else ""
                 self.langsam_fallback_triggered = False
@@ -4394,6 +5222,8 @@ class Onion:
             "locate_trace": initial_required_locate.get("query_log", []),
             "note": "root uses the original image as fallback when no valid focused crop exists",
         }
+        if initial_required_locate.get("suspicious_regions"):
+            root.untried.insert(0, "expert_suspicious")
         nodes = [root]
 
         def select_node(node):
@@ -4413,18 +5243,34 @@ class Onion:
             else:
                 action = leaf.untried.pop(0) if leaf.untried else random.choice(["semantic_focus", "semantic_scatter"])
                 parent_crop = self._dyfo_crop_for_node(original, leaf.box)
-                parent_crop_path = None
-                try:
-                    parent_crop_path = os.path.join(
-                        self.args.cache_path,
-                        "dyfo_parent_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+                if action == "expert_suspicious":
+                    suspicious_region = max(
+                        initial_required_locate.get("suspicious_regions", []),
+                        key=lambda item: float(item.get("score", 0.0)),
                     )
-                    os.makedirs(self.args.cache_path, exist_ok=True)
-                    parent_crop.save(parent_crop_path)
-                    focus, focus_response = self._dyfo_refine_focus(question, leaf.focus, action, parent_crop_path)
-                finally:
-                    if parent_crop_path and os.path.exists(parent_crop_path):
-                        os.remove(parent_crop_path)
+                    focus = "%s suspicious detector region" % suspicious_region["target"]
+                    focus_response = "dual-expert disagreement selected for stare"
+                    box = self._dyfo_expand_box(
+                        suspicious_region["box"], original.size, 1.5
+                    )
+                    locate_query = suspicious_region["target"]
+                    locate_source = "dual_expert_suspicious"
+                    locate_fallback = False
+                else:
+                    parent_crop_path = None
+                    try:
+                        parent_crop_path = os.path.join(
+                            self.args.cache_path,
+                            "dyfo_parent_%s_%s.jpg" % (os.getpid(), random.randint(0, 10**9))
+                        )
+                        os.makedirs(self.args.cache_path, exist_ok=True)
+                        parent_crop.save(parent_crop_path)
+                        focus, focus_response = self._dyfo_refine_focus(
+                            question, leaf.focus, action, parent_crop_path
+                        )
+                    finally:
+                        if parent_crop_path and os.path.exists(parent_crop_path):
+                            os.remove(parent_crop_path)
 
                 if action == "semantic_focus":
                     base_crop = parent_crop
@@ -4433,7 +5279,7 @@ class Onion:
                         box = self._dyfo_abs_box_from_local(local_box, leaf.box)
                     else:
                         box = leaf.box
-                else:
+                elif action == "semantic_scatter":
                     located, locate_query, locate_source, locate_fallback = locate_with_lazy_candidates(parent_crop, focus)
                     if located:
                         local_abs = self._dyfo_abs_box_from_local(located, leaf.box)
@@ -4511,16 +5357,18 @@ class Onion:
                 target.langsam_query_source = hit_source
                 target.langsam_fallback_triggered = target.langsam_fallback_triggered or hit_fallback
             if (
-                self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote")
+                self.args.dyfo_decision_mode in ("best_focus_answer", "weighted_vote", "conservative_override", "token_confidence_override", "node_confidence_override", "clip_statement_override")
                 and not target.local_answer
                 and (not required_targets or target.all_targets_present)
             ):
-                local_answer, local_response, local_prompt = self._dyfo_answer_from_crop(
-                    crop, target.focus, question
+                local_answer, local_response, local_prompt, local_confidence = self._dyfo_answer_from_crop(
+                    crop, target.focus, question, original=original,
+                    highlight=active_look_highlight,
                 )
                 target.local_answer = local_answer
                 target.local_answer_response = local_response
                 target.local_answer_prompt = local_prompt
+                target.local_answer_confidence = local_confidence
             node = target
             while node:
                 node.visits += 1
@@ -4542,16 +5390,24 @@ class Onion:
             print("[dyfo] no focused crop passed all-target retention; fallback to original image")
         best_crop = self._dyfo_crop_for_node(original, best_node.box)
         if self.args.dyfo_decision_mode == "best_focus_answer" and not best_node.local_answer:
-            local_answer, local_response, local_prompt = self._dyfo_answer_from_crop(
-                best_crop, best_node.focus, question
+            local_answer, local_response, local_prompt, local_confidence = self._dyfo_answer_from_crop(
+                best_crop, best_node.focus, question, original=original,
+                highlight=active_look_highlight,
             )
             best_node.local_answer = local_answer
             best_node.local_answer_response = local_response
             best_node.local_answer_prompt = local_prompt
+            best_node.local_answer_confidence = local_confidence
         image_filename = os.path.basename(image_path)
         focus_image_path = os.path.join(self.args.cache_path, "dyfo_focus_%s" % image_filename)
         os.makedirs(self.args.cache_path, exist_ok=True)
         best_crop.save(focus_image_path)
+        active_look_highlight_path = None
+        if active_look_highlight is not None:
+            active_look_highlight_path = os.path.join(
+                self.args.cache_path, "dyfo_active_look_%s" % image_filename
+            )
+            active_look_highlight.save(active_look_highlight_path)
         answer_image_path = self._dyfo_build_answer_image(original, best_crop, image_filename)
 
         evidence_prompt = (
@@ -4577,6 +5433,22 @@ class Onion:
         final_answer = ""
         decision_trace = {
             "mode": self.args.dyfo_decision_mode,
+            "node_answer_image_mode": getattr(
+                self.args, "dyfo_node_answer_image_mode", "concat_horizontal"
+            ),
+            "dual_visual_experts": bool(
+                getattr(self.args, "dyfo_dual_visual_experts", False)
+            ),
+            "dual_expert_conflict_rate": initial_required_locate.get("conflict_rate"),
+            "dual_expert_agreement_score": initial_required_locate.get("agreement_score"),
+            "dual_expert_look_mode": initial_required_locate.get("look_mode"),
+            "dual_expert_confirmed_count": len(
+                initial_required_locate.get("confirmed_regions", [])
+            ),
+            "dual_expert_suspicious_count": len(
+                initial_required_locate.get("suspicious_regions", [])
+            ),
+            "active_look_highlight_path": active_look_highlight_path,
             "best_focus_answer": best_node.local_answer,
             "free_key_objects": free_key_objects,
             "required_targets": required_targets,
@@ -4593,9 +5465,106 @@ class Onion:
         }
         if self.args.dyfo_decision_mode == "best_focus_answer":
             final_answer = best_node.local_answer
-        elif self.args.dyfo_decision_mode == "weighted_vote":
-            final_answer, vote_trace = self._dyfo_weighted_vote(nodes)
+        elif self.args.dyfo_decision_mode in ("weighted_vote", "conservative_override", "token_confidence_override", "node_confidence_override", "clip_statement_override"):
+            final_answer, vote_trace = self._dyfo_weighted_vote(
+                nodes,
+                use_node_confidence=self.args.dyfo_decision_mode == "node_confidence_override",
+            )
             decision_trace.update(vote_trace)
+            if self.args.dyfo_decision_mode == "conservative_override":
+                dyfo_candidate_answer = final_answer
+                final_answer, override_trace = self._dyfo_conservative_override(
+                    question,
+                    answer_image_path,
+                    baseline_answer,
+                    dyfo_candidate_answer,
+                    evidence,
+                    decision_trace,
+                )
+                decision_trace.update({
+                    "pure_baseline_answer": baseline_answer,
+                    "pure_baseline_prompt": baseline_prompt,
+                    "pure_baseline_response": baseline_response,
+                    "dyfo_candidate_answer": dyfo_candidate_answer,
+                    "conservative_override": override_trace,
+                    "conservative_final_answer": final_answer,
+                })
+                print("[dyfo conservative] DyFo candidate answer:", dyfo_candidate_answer)
+                print("[dyfo conservative] override trace:", override_trace)
+                print("[dyfo conservative] final answer:", final_answer)
+            elif self.args.dyfo_decision_mode == "token_confidence_override":
+                dyfo_candidate_answer = final_answer
+                final_answer, override_trace = self._dyfo_token_confidence_override(
+                    question,
+                    answer_image_path,
+                    baseline_answer,
+                    baseline_confidence,
+                    dyfo_candidate_answer,
+                    decision_trace,
+                )
+                decision_trace.update({
+                    "pure_baseline_answer": baseline_answer,
+                    "pure_baseline_prompt": baseline_prompt,
+                    "pure_baseline_response": baseline_response,
+                    "pure_baseline_token_confidence": baseline_confidence,
+                    "dyfo_candidate_answer": dyfo_candidate_answer,
+                    "token_confidence_override": override_trace,
+                    "token_confidence_final_answer": final_answer,
+                })
+                print("[dyfo token confidence] DyFo candidate answer:", dyfo_candidate_answer)
+                print("[dyfo token confidence] override trace:", override_trace)
+                print("[dyfo token confidence] final answer:", final_answer)
+            elif self.args.dyfo_decision_mode == "node_confidence_override":
+                dyfo_candidate_answer = final_answer
+                final_answer, override_trace = self._dyfo_node_confidence_override(
+                    baseline_answer,
+                    baseline_confidence,
+                    dyfo_candidate_answer,
+                    decision_trace,
+                )
+                decision_trace.update({
+                    "pure_baseline_answer": baseline_answer,
+                    "pure_baseline_prompt": baseline_prompt,
+                    "pure_baseline_response": baseline_response,
+                    "pure_baseline_token_confidence": baseline_confidence,
+                    "dyfo_candidate_answer": dyfo_candidate_answer,
+                    "node_confidence_override": override_trace,
+                    "node_confidence_final_answer": final_answer,
+                })
+                print("[dyfo node confidence] DyFo candidate answer:", dyfo_candidate_answer)
+                print("[dyfo node confidence] override trace:", override_trace)
+                print("[dyfo node confidence] final answer:", final_answer)
+            elif self.args.dyfo_decision_mode == "clip_statement_override":
+                dyfo_candidate_answer = final_answer
+                final_answer, override_trace = self._dyfo_clip_statement_override(
+                    question,
+                    original,
+                    best_crop,
+                    baseline_answer,
+                    dyfo_candidate_answer,
+                    decision_trace,
+                )
+                decision_trace.update({
+                    "pure_baseline_answer": baseline_answer,
+                    "pure_baseline_prompt": baseline_prompt,
+                    "pure_baseline_response": baseline_response,
+                    "pure_baseline_token_confidence": baseline_confidence,
+                    "dyfo_candidate_answer": dyfo_candidate_answer,
+                    "clip_statement_override": override_trace,
+                    "clip_statement_final_answer": final_answer,
+                })
+                print("[dyfo CLIP statement] DyFo candidate answer:", dyfo_candidate_answer)
+                print("[dyfo CLIP statement] override trace:", override_trace)
+                print("[dyfo CLIP statement] final answer:", final_answer)
+        if getattr(self.args, "dyfo_region_audit", False):
+            try:
+                decision_trace["region_audit"] = self._dyfo_build_region_audit(
+                    key, question, image_path, original, nodes, best_node
+                )
+                print("[dyfo region audit]", decision_trace["region_audit"])
+            except Exception as exc:
+                decision_trace["region_audit"] = {"error": str(exc), "sample_key": key}
+                print("[dyfo region audit] failed:", exc)
         trace = {
             "free_key_objects": free_key_objects,
             "free_key_object_response": key_object_response,
@@ -4644,6 +5613,7 @@ class Onion:
                     "target_retention_trace": node.target_retention_trace,
                     "target_recovery_trace": node.target_recovery_trace,
                     "local_answer": node.local_answer,
+                    "local_answer_confidence": node.local_answer_confidence,
                 }
                 for node in nodes
             ],
@@ -4660,6 +5630,7 @@ class Onion:
         return {
             "evidence": evidence,
             "focus_image_path": focus_image_path,
+            "active_look_highlight_path": active_look_highlight_path,
             "answer_image_path": answer_image_path,
             "final_answer": final_answer,
             "decision_trace": decision_trace,
@@ -5610,6 +6581,22 @@ class Onion:
                 image_path=image_path, max_new_tokens=max_new_tokens,
                 use_images=use_images, history=history, return_history=return_history
             )
+
+    def _call_llm_with_token_confidence(self, prompt, image_path=None, max_new_tokens=512,
+                                        use_images=True, history=None):
+        if self.use_vllm:
+            return chat_with_qwen_vllm(
+                self.vllm_client, self.vllm_model_name, prompt,
+                image_path=image_path, max_new_tokens=max_new_tokens,
+                use_images=use_images, history=history,
+                return_token_confidence=True,
+            )
+        return chat_with_qwen_vl(
+            self.model, self.processor, prompt,
+            image_path=image_path, max_new_tokens=max_new_tokens,
+            use_images=use_images, history=history,
+            return_token_confidence=True,
+        )
 
     def initialize_lang_sam(self):
         with torch.no_grad():

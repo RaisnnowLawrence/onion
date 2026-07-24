@@ -4,6 +4,7 @@ import argparse
 import ast
 import base64
 import json
+import math
 
 import torch
 from tqdm import tqdm
@@ -67,7 +68,8 @@ def chat_with_qwen_vl(
     max_new_tokens: int = 512,
     use_images: bool = True,
     history: list = None,  # 新增：历史对话参数
-    return_history: bool = False  # 新增：是否返回更新后的历史
+    return_history: bool = False,  # 新增：是否返回更新后的历史
+    return_token_confidence: bool = False,
 ) -> str:
     """
     与Qwen3-VL模型进行对话交流，支持多轮对话
@@ -126,8 +128,17 @@ def chat_with_qwen_vl(
     inputs = inputs.to(model.device)
     
     # 生成回复
+    generation_kwargs = {"max_new_tokens": max_new_tokens}
+    if return_token_confidence:
+        generation_kwargs.update(
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
     with torch.no_grad():
-        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generated = model.generate(**inputs, **generation_kwargs)
+
+    generated_ids = generated.sequences if return_token_confidence else generated
     
     # 解码输出
     generated_ids_trimmed = [
@@ -139,12 +150,47 @@ def chat_with_qwen_vl(
         clean_up_tokenization_spaces=False
     )
     reply = output_text[0] if output_text else ""
+
+    confidence_details = None
+    if return_token_confidence:
+        transition_scores = model.compute_transition_scores(
+            generated.sequences,
+            generated.scores,
+            normalize_logits=True,
+        )
+        output_ids = generated_ids_trimmed[0]
+        token_logprobs = transition_scores[0][:len(output_ids)].detach().float().cpu().tolist()
+        token_ids = output_ids.detach().cpu().tolist()
+        special_ids = set(getattr(processor.tokenizer, "all_special_ids", []) or [])
+        token_items = []
+        answer_logprobs = []
+        for token_id, logprob in zip(token_ids, token_logprobs):
+            if token_id in special_ids:
+                continue
+            token_items.append({
+                "token_id": int(token_id),
+                "token": processor.decode([token_id], skip_special_tokens=False),
+                "logprob": float(logprob),
+            })
+            answer_logprobs.append(float(logprob))
+        mean_logprob = sum(answer_logprobs) / len(answer_logprobs) if answer_logprobs else float("-inf")
+        confidence_details = {
+            "method": "exp_mean_answer_token_logprob",
+            "confidence": math.exp(mean_logprob) if answer_logprobs else 0.0,
+            "mean_logprob": mean_logprob,
+            "token_count": len(answer_logprobs),
+            "tokens": token_items,
+        }
     
     # 将模型的回复添加到历史对话
     messages.append({"role": "assistant", "content": [{"type": "text", "text": reply}]})
     
-    if return_history:
+    if return_history and return_token_confidence:
+        return reply, messages, confidence_details
+    elif return_history:
         return reply, messages
+    elif return_token_confidence:
+        return reply, confidence_details
     else:
         return reply
 
@@ -157,7 +203,8 @@ def chat_with_qwen_vllm(
     max_new_tokens: int = 512,
     use_images: bool = True,
     history: list = None,
-    return_history: bool = False
+    return_history: bool = False,
+    return_token_confidence: bool = False,
 ) -> str:
     """
     通过vLLM OpenAI兼容API与Qwen3-VL模型进行对话，支持多轮对话
@@ -188,22 +235,47 @@ def chat_with_qwen_vllm(
 
     messages.append(current_message)
 
-    chat_response = client.chat.completions.create(
+    request_args = dict(
         model=model_name,
         messages=messages,
         max_tokens=max_new_tokens,
-        temperature=1.0,
-        top_p=0.95,
+        temperature=0.0 if return_token_confidence else 1.0,
+        top_p=1.0 if return_token_confidence else 0.95,
         presence_penalty=0.0,
         extra_body={"top_k": 20},
     )
+    if return_token_confidence:
+        request_args.update(logprobs=True, top_logprobs=1)
+    chat_response = client.chat.completions.create(**request_args)
 
     reply = chat_response.choices[0].message.content
 
+    confidence_details = None
+    if return_token_confidence:
+        content_logprobs = getattr(chat_response.choices[0].logprobs, "content", None) or []
+        token_items = [
+            {"token": item.token, "logprob": float(item.logprob)}
+            for item in content_logprobs
+            if item.logprob is not None
+        ]
+        answer_logprobs = [item["logprob"] for item in token_items]
+        mean_logprob = sum(answer_logprobs) / len(answer_logprobs) if answer_logprobs else float("-inf")
+        confidence_details = {
+            "method": "exp_mean_answer_token_logprob",
+            "confidence": math.exp(mean_logprob) if answer_logprobs else 0.0,
+            "mean_logprob": mean_logprob,
+            "token_count": len(answer_logprobs),
+            "tokens": token_items,
+        }
+
     messages.append({"role": "assistant", "content": [{"type": "text", "text": reply}]})
 
-    if return_history:
+    if return_history and return_token_confidence:
+        return reply, messages, confidence_details
+    elif return_history:
         return reply, messages
+    elif return_token_confidence:
+        return reply, confidence_details
     else:
         return reply
 
